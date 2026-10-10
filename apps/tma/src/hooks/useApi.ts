@@ -1,0 +1,438 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import type {
+  AiProviderListResponse,
+  AiProviderTestResult,
+  CreateAiProviderInput,
+  Cycle,
+  Lesson,
+  Plan,
+  ProgressDashboard,
+  UpdateAiProviderInput,
+  UserProfile,
+} from '@kpanah/shared';
+import { api, setToken, ApiClientError } from '../lib/api';
+import { useSessionStore } from '../store/session';
+import { useUiStore } from '../store/ui';
+import {
+  MOCK_ADMIN_USERS,
+  MOCK_AI_PROVIDERS,
+  MOCK_CYCLE,
+  MOCK_DASHBOARD,
+  MOCK_LESSON,
+  MOCK_PLANS,
+  MOCK_USER,
+} from '../mocks/user';
+
+const MOCK = import.meta.env.VITE_ENABLE_MOCK === 'true' || import.meta.env.DEV;
+
+// ─────────────────────────────────────────────────────────────────────
+// Auth
+// ─────────────────────────────────────────────────────────────────────
+
+export function useAuthBootstrap(): void {
+  const { setAuthenticating, setUser, setUnauthenticated } = useSessionStore();
+  const setUiLanguage = useUiStore((s) => s.setUiLanguage);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      setAuthenticating();
+      try {
+        const result = (await api.auth()) as { token: string; user: UserProfile };
+        if (cancelled) return;
+        setToken(result.token);
+        setUser(result.user);
+        if (result.user.uiLanguage) setUiLanguage(result.user.uiLanguage);
+      } catch (err) {
+        if (cancelled) return;
+        const message =
+          err instanceof ApiClientError ? err.userMessageKey ?? err.message : 'errors.generic';
+        setUnauthenticated(message);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setAuthenticating, setUser, setUnauthenticated, setUiLanguage]);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Home (learn tab)
+// ─────────────────────────────────────────────────────────────────────
+
+export interface HomeData {
+  user: UserProfile;
+  cycle: Cycle | null;
+  lesson: Lesson | null;
+  generating: boolean;
+  generationStatus: string | null;
+}
+
+export function useHome() {
+  const status = useSessionStore((s) => s.status);
+
+  return useQuery({
+    queryKey: ['home'],
+    enabled: status === 'authenticated',
+    queryFn: async (): Promise<HomeData> => {
+      if (MOCK) {
+        return {
+          user: MOCK_USER,
+          cycle: MOCK_CYCLE,
+          lesson: MOCK_LESSON,
+          generating: false,
+          generationStatus: null,
+        };
+      }
+      return api.home() as Promise<HomeData>;
+    },
+    staleTime: 30_000,
+  });
+}
+// ─────────────────────────────────────────────────────────────────────
+// Progress dashboard
+// ─────────────────────────────────────────────────────────────────────
+
+export function useProgress() {
+  const status = useSessionStore((s) => s.status);
+
+  return useQuery({
+    queryKey: ['progress'],
+    enabled: status === 'authenticated',
+    queryFn: async (): Promise<{ dashboard: ProgressDashboard }> => {
+      if (MOCK) return { dashboard: MOCK_DASHBOARD };
+      return api.progress() as Promise<{ dashboard: ProgressDashboard }>;
+    },
+    staleTime: 60_000,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Plans / store
+// ─────────────────────────────────────────────────────────────────────
+
+export function usePlans() {
+  return useQuery({
+    queryKey: ['plans'],
+    queryFn: async (): Promise<{ plans: Plan[] }> => {
+      if (MOCK) return { plans: MOCK_PLANS };
+      return api.plans() as Promise<{ plans: Plan[] }>;
+    },
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useCreateInvoice() {
+  const showToast = useUiStore((s) => s.showToast);
+
+  return useMutation({
+    mutationFn: async (planId: string) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 700));
+        return { invoiceLink: '', amountStars: 0, mocked: true };
+      }
+      return api.createInvoice(planId);
+    },
+    onError: (err) => {
+      const key = err instanceof ApiClientError ? err.userMessageKey : null;
+      showToast(key ?? 'errors.payment_unavailable', 'error');
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Lesson completion
+// ─────────────────────────────────────────────────────────────────────
+
+export interface CompleteLessonResult {
+  dayNumber: number;
+  score: { score: number; accuracy: number; speedBonus: number; isPerfect: boolean };
+  reward: number;
+  streak: number;
+  cycleCompleted: boolean;
+  nextCycleTriggered: boolean;
+  appLocked: boolean;
+}
+
+export function useCompleteLesson() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: {
+      lessonId: string;
+      durationSeconds: number;
+      answers: {
+        itemId: string;
+        isCorrect: boolean;
+        responseMs: number;
+        linkedTerm?: string;
+        usedHint?: boolean;
+      }[];
+    }): Promise<CompleteLessonResult> => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 600));
+        const total = input.answers.length || 1;
+        const correct = input.answers.filter((a) => a.isCorrect).length;
+        const accuracy = Math.round((correct / total) * 100);
+        return {
+          dayNumber: 3,
+          score: { score: Math.min(100, accuracy + 8), accuracy, speedBonus: 60, isPerfect: accuracy === 100 },
+          reward: 10,
+          streak: 6,
+          cycleCompleted: false,
+          nextCycleTriggered: false,
+          appLocked: false,
+        };
+      }
+      return api.completeLesson(input) as Promise<CompleteLessonResult>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['home'] });
+      void queryClient.invalidateQueries({ queryKey: ['progress'] });
+    },
+  });
+}
+
+export function useSendTelemetry() {
+  return useMutation({
+    mutationFn: async (body: unknown) => {
+      if (MOCK) return { accepted: 1 };
+      return api.telemetry(body);
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Onboarding / settings
+// ─────────────────────────────────────────────────────────────────────
+
+export function useOnboarding() {
+  const queryClient = useQueryClient();
+  const setUser = useSessionStore((s) => s.setUser);
+  const currentUser = useSessionStore((s) => s.user);
+
+  return useMutation({
+    mutationFn: async (body: {
+      uiLanguage: string;
+      targetLanguage: string;
+      skillLevel: string;
+      learningGoal: string;
+    }) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 900));
+        return { onboardingComplete: true, generating: true };
+      }
+      return api.onboarding(body);
+    },
+    onSuccess: (_result, variables) => {
+      if (currentUser) {
+        setUser({
+          ...currentUser,
+          uiLanguage: variables.uiLanguage as UserProfile['uiLanguage'],
+          targetLanguage: variables.targetLanguage as UserProfile['targetLanguage'],
+          skillLevel: variables.skillLevel as UserProfile['skillLevel'],
+          learningGoal: variables.learningGoal,
+          onboardingDone: true,
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
+}
+
+export function useUpdateProfile() {
+  const setUser = useSessionStore((s) => s.setUser);
+  const updateUser = useSessionStore((s) => s.updateUser);
+
+  return useMutation({
+    mutationFn: async (body: Record<string, unknown>) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 400));
+        return { updated: true };
+      }
+      return api.updateProfile(body);
+    },
+    onSuccess: (_result, variables) => {
+      updateUser(variables as Partial<UserProfile>);
+      const user = useSessionStore.getState().user;
+      if (user) setUser(user);
+    },
+  });
+}
+
+export function useDeleteAccount() {
+  const setUnauthenticated = useSessionStore((s) => s.setUnauthenticated);
+
+  return useMutation({
+    mutationFn: async () => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 500));
+        return { deleted: true };
+      }
+      return api.deleteAccount();
+    },
+    onSuccess: () => {
+      setToken(null);
+      setUnauthenticated();
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Admin
+// ─────────────────────────────────────────────────────────────────────
+
+export function useAdminUsers(params: { limit?: number; offset?: number; q?: string }) {
+  const isAdmin = useSessionStore((s) => s.user?.isAdmin);
+
+  return useQuery({
+    queryKey: ['admin-users', params],
+    enabled: Boolean(isAdmin),
+    queryFn: async () => {
+      if (MOCK) return { users: MOCK_ADMIN_USERS as never[] };
+      return api.adminUsers(params) as Promise<{ users: never[] }>;
+    },
+  });
+}
+
+export function useAdminGift() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (body: {
+      telegramId: number;
+      planType: string;
+      note?: string;
+      extend: boolean;
+    }) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 600));
+        return { granted: true };
+      }
+      return api.adminGift(body);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+    },
+  });
+}
+
+export function useAdminStats() {
+  const isAdmin = useSessionStore((s) => s.user?.isAdmin);
+
+  return useQuery({
+    queryKey: ['admin-stats'],
+    enabled: Boolean(isAdmin),
+    queryFn: async () => {
+      if (MOCK) {
+        return { stats: { totalUsers: 3, activeSubscriptions: 2, trialsActive: 1, receiptsPending: 0 }, plans: MOCK_PLANS };
+      }
+      return api.adminStats() as Promise<Record<string, unknown>>;
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// AI provider pool (admin)
+// ─────────────────────────────────────────────────────────────────────
+
+export function useAiProviders() {
+  const isAdmin = useSessionStore((s) => s.user?.isAdmin);
+
+  return useQuery({
+    queryKey: ['admin-ai-providers'],
+    enabled: Boolean(isAdmin),
+    queryFn: async (): Promise<AiProviderListResponse> => {
+      if (MOCK) return MOCK_AI_PROVIDERS;
+      return api.adminAiProviders() as Promise<AiProviderListResponse>;
+    },
+  });
+}
+
+export function useCreateAiProvider() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (input: CreateAiProviderInput) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 700));
+        return { provider: { id: `mock-${Date.now()}`, label: input.label } };
+      }
+      return api.adminAiProviderCreate(input);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-ai-providers'] });
+    },
+  });
+}
+
+export function useUpdateAiProvider() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: UpdateAiProviderInput }) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 500));
+        return { provider: { id } };
+      }
+      return api.adminAiProviderUpdate(id, patch);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-ai-providers'] });
+    },
+  });
+}
+
+export function useDeleteAiProvider() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 400));
+        return { deleted: true };
+      }
+      return api.adminAiProviderDelete(id);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-ai-providers'] });
+    },
+  });
+}
+
+export function useReorderAiProviders() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (order: string[]) => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 300));
+        return { providers: [] };
+      }
+      return api.adminAiProviderReorder(order);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-ai-providers'] });
+    },
+  });
+}
+
+export function useTestAiProvider() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (id: string): Promise<AiProviderTestResult> => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 1200));
+        return { ok: true, ms: 640, sample: 'OK' };
+      }
+      return api.adminAiProviderTest(id) as Promise<AiProviderTestResult>;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-ai-providers'] });
+    },
+  });
+}

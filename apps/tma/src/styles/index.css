@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ══════════════════════════════════════════════════════════════════
+   Theme tokens
+   Telegram injects --tg-theme-* variables. We map them onto our own
+   tokens and provide light/dark fallbacks so the app also works when
+   opened in a plain browser (dev, PWA phase).
+   ══════════════════════════════════════════════════════════════════ */
+
+:root {
+  --card-bg: #ffffff;
+  --border-color: #e9e9ec;
+  --surface-sunken: #f6f7f9;
+
+  --tg-theme-bg-color: #ffffff;
+  --tg-theme-text-color: #101828;
+  --tg-theme-hint-color: #667085;
+  --tg-theme-secondary-bg-color: #f4f5f7;
+}
+
+html[data-theme='dark'],
+.dark {
+  --card-bg: #1c1c1e;
+  --border-color: #2c2c2e;
+  --surface-sunken: #131315;
+
+  --tg-theme-bg-color: #0f0f10;
+  --tg-theme-text-color: #f5f5f7;
+  --tg-theme-hint-color: #98989f;
+  --tg-theme-secondary-bg-color: #1c1c1e;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overscroll-behavior-y: none;
+}
+
+body {
+  background: var(--tg-theme-bg-color);
+  color: var(--tg-theme-text-color);
+  font-family: theme('fontFamily.sans');
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   RTL / LTR handling
+   ══════════════════════════════════════════════════════════════════ */
+
+[dir='rtl'] .force-ltr {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: isolate;
+}
+
+/* متن انگلیسی درون رابط فارسی باید LTR بماند */
+.target-text {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: left;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Components
+   ══════════════════════════════════════════════════════════════════ */
+
+@layer components {
+  .card {
+    @apply rounded-card bg-card border border-border shadow-card;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-3
+           font-medium text-sm transition-all duration-150 active:scale-[0.97]
+           disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-accent-text shadow-sm;
+  }
+
+  .btn-secondary {
+    @apply btn bg-[var(--surface-sunken)] text-text border border-border;
+  }
+
+  .btn-ghost {
+    @apply btn text-text-hint;
+  }
+
+  .btn-danger {
+    @apply btn bg-danger-500 text-white;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-pill px-3 py-1 text-xs font-medium;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-border bg-card px-4 py-3 text-sm
+           text-text placeholder:text-text-muted outline-none
+           focus:border-accent transition;
+    box-shadow: none;
+  }
+
+  .input:focus {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 20%, transparent);
+  }
+
+  .skeleton {
+    @apply animate-pulse-soft rounded-lg bg-[var(--surface-sunken)];
+  }
+
+  /* ── Theme-aware accent helpers ─────────────────────────────────
+     `accent` is a CSS variable, so Tailwind cannot apply an opacity
+     modifier to it. These classes reproduce `/5`, `/20` and `/30`
+     for the Telegram accent colour and adapt to dark mode.
+     ──────────────────────────────────────────────────────────────── */
+  .bg-accent-soft {
+    background-color: color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 6%, transparent);
+  }
+
+  .ring-accent-soft {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 22%, transparent);
+  }
+
+  .ring-accent-glow {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 20%, transparent);
+  }
+
+  .border-danger-soft {
+    border-color: color-mix(in srgb, var(--tg-theme-destructive-text-color, #dc2626) 35%, transparent);
+  }
+
+  /* ── Dark-mode legibility fixes ─────────────────────────────────
+     Pale 100-level tints (used for success/danger banners) would wash
+     out on a dark card, so they are remapped to translucent versions
+     of their 500-level colour.
+     ──────────────────────────────────────────────────────────────── */
+  html[data-theme='dark'] .bg-success-100\/50,
+  html[data-theme='dark'] .bg-success-100\/60 {
+    background-color: rgb(22 163 74 / 0.16);
+  }
+
+  html[data-theme='dark'] .bg-danger-100\/50 {
+    background-color: rgb(220 38 38 / 0.16);
+  }
+
+  html[data-theme='dark'] .bg-brand-50\/40 {
+    background-color: rgb(50 125 255 / 0.12);
+  }
+
+  .safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Scrollbar (desktop preview)
+   ══════════════════════════════════════════════════════════════════ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Progress bar animation
+   ══════════════════════════════════════════════════════════════════ */
+
+.progress-track {
+  background: var(--border-color);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}

@@ -1,0 +1,80 @@
+export interface Env {
+  // Telegram
+  TELEGRAM_BOT_TOKEN: string;
+  TELEGRAM_WEBHOOK_SECRET?: string;
+  TELEGRAM_ADMIN_BOT_TOKEN?: string;
+  TELEGRAM_ADMIN_IDS?: string;
+
+  // Supabase
+  SUPABASE_URL: string;
+  SUPABASE_ANON_KEY: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
+
+  // Auth
+  JWT_SECRET: string;
+
+  // Queue
+  QSTASH_TOKEN?: string;
+  QSTASH_CURRENT_SIGNING_KEY?: string;
+  QSTASH_NEXT_SIGNING_KEY?: string;
+  /** آدرس خود Worker برای callback های QStash */
+  SELF_URL?: string;
+
+  // AI
+  GEMINI_API_KEY?: string;
+  DEEPSEEK_API_KEY?: string;
+  ANTHROPIC_API_KEY?: string;
+  AI_PRIMARY_MODEL?: string;
+  AI_FALLBACK_MODELS?: string;
+
+  /**
+   * Master secret for encrypting AI provider keys that admins enter through
+   * the panel. Arbitrary-length passphrase; it is SHA-256 hashed into 32 bytes
+   * of AES-GCM key material. Rotating it makes existing stored keys
+   * unreadable, so change it only alongside re-entering the provider keys.
+   */
+  PROVIDER_ENCRYPTION_KEY?: string;
+
+  // Security
+  GATE_PATH?: string;
+  ENABLE_PAYLOAD_ENCRYPTION?: string;
+  PAYLOAD_ENCRYPTION_KEY?: string;
+  RATE_LIMIT_PER_MINUTE?: string;
+  RATE_LIMIT_PER_DAY?: string;
+
+  // Business
+  FREE_TRIAL_DAYS?: string;
+  CYCLE_STALL_DAYS?: string;
+
+  /** آدرس عمومی اپلیکیشن مینی‌اپ برای دکمه‌های ربات */
+  MINI_APP_URL?: string;
+
+  // KV / DO
+  RATE_LIMIT_KV?: KVNamespace;
+  CACHE_KV?: KVNamespace;
+}
+
+/** داده‌ای که از initData تلگرام استخراج و در JWT قرار می‌گیرد */
+export interface AuthClaims {
+  /** لازم است تا با JwtPayload سازگار باشد */
+  [key: string]: unknown;
+  telegramId: number;
+  userId: string;
+  uiLanguage: string;
+  iat: number;
+  exp: number;
+}
+
+export interface RequestContext {
+  env: Env;
+  requestId: string;
+  claims?: AuthClaims;
+  telegramId?: number;
+  userId?: string;
+  /**
+   * از ExecutionContext به ارث می‌رسد. برای کارهای پس‌زمینه‌ای که
+   * نباید پاسخ کاربر را معطل کنند (پردازش تلگرام، تولید چرخه، ...).
+   * در تست‌ها ممکن است undefined باشد، پس همیشه اختیاری صدا زده می‌شود.
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
+}

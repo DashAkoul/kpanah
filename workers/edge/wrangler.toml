@@ -1,0 +1,75 @@
+name = "kpanah-lang-edge"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# مسیر مبهم‌سازی‌شده — مطابق سند امنیتی
+# (در محیط production می‌توانید با env override تغییر دهید)
+
+[observability]
+enabled = true
+
+[placement]
+mode = "smart"
+
+# ─────────────────────────────────────────────────────────────────────
+# Rate limiting via KV (اختیاری ولی توصیه‌شده)
+# ─────────────────────────────────────────────────────────────────────
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "5c273b38df14451aa5e0967d3f832579"
+preview_id = "5c273b38df14451aa5e0967d3f832579"
+
+[[kv_namespaces]]
+binding = "CACHE_KV"
+id = "49474852f40b480d8acaf20becbc792c"
+preview_id = "49474852f40b480d8acaf20becbc792c"
+
+# ─────────────────────────────────────────────────────────────────────
+# Secrets (با `wrangler secret put NAME` تنظیم کنید — در فایل نگذارید)
+#
+#   TELEGRAM_BOT_TOKEN
+#   TELEGRAM_WEBHOOK_SECRET
+#   TELEGRAM_ADMIN_BOT_TOKEN
+#   SUPABASE_URL
+#   SUPABASE_ANON_KEY
+#   SUPABASE_SERVICE_ROLE_KEY
+#   JWT_SECRET
+#   QSTASH_TOKEN
+#   QSTASH_CURRENT_SIGNING_KEY
+#   QSTASH_NEXT_SIGNING_KEY
+#   GEMINI_API_KEY
+#   DEEPSEEK_API_KEY
+#   ANTHROPIC_API_KEY
+# ─────────────────────────────────────────────────────────────────────
+
+[vars]
+MINI_APP_URL = "https://your-tma.vercel.app"
+SELF_URL = "https://kpanah-lang-edge.YOUR-SUBDOMAIN.workers.dev"
+GATE_PATH = "/kpanah56/8fjg7rfb/v1/gate"
+AI_PRIMARY_MODEL = "gemini-2.5-flash"
+AI_FALLBACK_MODELS = "deepseek-chat,claude-3-5-sonnet-latest"
+ENABLE_PAYLOAD_ENCRYPTION = "false"
+RATE_LIMIT_PER_MINUTE = "60"
+RATE_LIMIT_PER_DAY = "2000"
+FREE_TRIAL_DAYS = "7"
+CYCLE_STALL_DAYS = "12"
+
+# ─────────────────────────────────────────────────────────────────────
+# Cron: انقضای اشتراک‌ها (هر ساعت)
+# ─────────────────────────────────────────────────────────────────────
+
+[triggers]
+crons = ["0 * * * *", "*/5 * * * *", "0 9 * * *"]
+
+# ─────────────────────────────────────────────────────────────────────
+# محیط توسعه محلی
+# ─────────────────────────────────────────────────────────────────────
+
+[env.dev]
+name = "kpanah-lang-edge-dev"
+
+[env.dev.vars]
+ENABLE_PAYLOAD_ENCRYPTION = "false"
+RATE_LIMIT_PER_MINUTE = "1000"

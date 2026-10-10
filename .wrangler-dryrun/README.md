@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "kpanah-lang-edge" generated at 2026-10-10T23:17:35.445Z.

@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>عیب‌یابی ورود — Kpanah</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --line: #262b36;
+        --text: #e8eaed;
+        --hint: #9aa0aa;
+        --ok: #34d399;
+        --err: #f87171;
+        --warn: #fbbf24;
+        --accent: #60a5fa;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace;
+        padding: 12px;
+      }
+      h1 { font-size: 16px; margin: 4px 0 12px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+      }
+      .card h2 {
+        font-size: 12px;
+        margin: 0 0 8px;
+        color: var(--hint);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .row { display: flex; gap: 8px; padding: 2px 0; }
+      .k { color: var(--hint); min-width: 132px; flex: 0 0 auto; }
+      .v { word-break: break-all; }
+      .ok { color: var(--ok); }
+      .err { color: var(--err); }
+      .warn { color: var(--warn); }
+      .accent { color: var(--accent); }
+      button {
+        background: var(--accent);
+        color: #06101f;
+        border: 0;
+        border-radius: 8px;
+        padding: 9px 14px;
+        font-weight: 700;
+        font-size: 13px;
+        margin: 4px 4px 4px 0;
+      }
+      button.sec { background: #2a3040; color: var(--text); }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-all;
+        background: #0b0d12;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        margin: 6px 0 0;
+        max-height: 320px;
+        overflow: auto;
+        font-size: 11px;
+      }
+      .pill {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        border: 1px solid var(--line);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🔎 عیب‌یابی ورود</h1>
+
+    <div class="card">
+      <h2>۱. وضعیت محیط تلگرام</h2>
+      <div id="env"></div>
+    </div>
+
+    <div class="card">
+      <h2>۲. تست زنده ورود</h2>
+      <div id="authtest" class="hint">هنوز اجرا نشده</div>
+      <button id="btn-auth">تست ورود (POST ?action=auth)</button>
+      <button id="btn-health" class="sec">تست سلامت (GET ?action=health)</button>
+      <button id="btn-copy" class="sec">کپی گزارش</button>
+    </div>
+
+    <div class="card">
+      <h2>۳. initData خام (چیزی که تلگرام فرستاده)</h2>
+      <pre id="raw">—</pre>
+    </div>
+
+    <div class="card">
+      <h2>۴. لاگ API</h2>
+      <pre id="log">—</pre>
+    </div>
+
+    <script>
+      // ── خواندن مقادیر build (همان‌هایی که api.ts استفاده می‌کند) ──
+      // این صفحه مستقل از باندل اپ است، پس نمی‌تواند از api.ts مقدار
+      // بگیرد. بنابراین آدرس ورکر را صریح اینجا می‌گذاریم.
+      var API_BASE = 'https://kpanah-lang-edge.language-app-backend.workers.dev';
+      var GATE = '/kpanah56/8fjg7rfb/v1/gate';
+
+      function el(id) { return document.getElementById(id); }
+      function row(k, v, cls) {
+        return '<div class="row"><span class="k">' + k + '</span><span class="v ' +
+          (cls || '') + '">' + v + '</span></div>';
+      }
+      function esc(s) {
+        return String(s == null ? '—' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      var wa = (window.Telegram && window.Telegram.WebApp) || null;
+
+      // ── بخش ۱: محیط ────────────────────────────────────────────
+      function renderEnv() {
+        var loc = window.location.href;
+        var html = '';
+        html += row('Telegram SDK', wa ? '<span class="ok">موجود</span>' : '<span class="err">نیست</span>');
+        html += row('platform', esc(wa && wa.platform));
+        html += row('version', esc(wa && wa.version));
+        html += row('initData موجود؟',
+          (wa && wa.initData)
+            ? '<span class="ok">بله</span> (' + wa.initData.length + ' کاراکتر)'
+            : '<span class="err">خیر (خالی)</span>');
+        html += row('start_param', esc(wa && wa.initDataUnsafe && wa.initDataUnsafe.start_param));
+        html += row('user.id', esc(wa && wa.initDataUnsafe && wa.initDataUnsafe.user && wa.initDataUnsafe.user.id));
+        html += row('origin', esc(loc.split('?')[0].split('#')[0]));
+        html += row('hash', esc(window.location.hash ? window.location.hash.slice(0, 80) : '—'));
+        html += row('API_BASE (صریح)', esc(API_BASE), 'ok');
+        html += row('GATE', esc(GATE));
+        el('env').innerHTML = html;
+
+        // initData خام
+        el('raw').textContent = (wa && wa.initData) ? wa.initData : '(خالی — تلگرام چیز معتبری نفرستاده)';
+      }
+
+      // ── بخش ۴: لاگ ──────────────────────────────────────────────
+      function renderLog() {
+        var log = window.__KPANAH_LOG__ || [];
+        if (!log.length) { el('log').textContent = '(خالی)'; return; }
+        el('log').textContent = log.map(function (e) {
+          return '[' + e.t + '] ' + e.kind + ' ' + JSON.stringify(e.data);
+        }).join('\n');
+      }
+
+      // ── بخش ۲: تست‌ها ───────────────────────────────────────────
+      function base() {
+        return API_BASE;
+      }
+
+      async function testHealth() {
+        var out = el('authtest');
+        out.innerHTML = '<span class="accent">در حال تست...</span>';
+        var url = base() + GATE + '?action=health';
+        try {
+          var r = await fetch(url, { method: 'GET' });
+          var t = await r.text();
+          out.innerHTML =
+            row('GET', esc(url)) +
+            row('status', r.status, r.ok ? 'ok' : 'err') +
+            row('content-type', esc(r.headers.get('content-type'))) +
+            '<pre>' + esc(t.slice(0, 600)) + '</pre>';
+        } catch (e) {
+          out.innerHTML = row('GET', esc(url)) + row('خطا', esc(e.message), 'err');
+        }
+      }
+
+      async function testAuth() {
+        var out = el('authtest');
+        if (!wa || !wa.initData) {
+          out.innerHTML = row('نتیجه', 'initData خالی است — مسیر استاندارد ممکن نیست', 'err');
+          return;
+        }
+        out.innerHTML = '<span class="accent">در حال تست ورود...</span>';
+        var url = base() + GATE + '?action=auth';
+        try {
+          var r = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ initData: wa.initData })
+          });
+          var t = await r.text();
+          var parsed = null;
+          try { parsed = JSON.parse(t); } catch (e) {}
+          var summary;
+          if (parsed && parsed.ok) {
+            summary = row('نتیجه', '<span class="ok">✅ موفق — توکن صادر شد</span>') +
+                      row('user.telegramId', esc(parsed.data && parsed.data.user && parsed.data.user.telegramId));
+          } else if (parsed && parsed.error) {
+            summary = row('نتیجه', '<span class="err">✗ خطا</span>') +
+                      row('code', esc(parsed.error.code), 'err') +
+                      row('message', esc(parsed.error.message), 'err');
+          } else {
+            summary = row('نتیجه', '<span class="err">پاسخ JSON نبود (شاید 404 HTML)</span>', 'err');
+          }
+          out.innerHTML = row('POST', esc(url)) +
+            row('status', r.status, r.ok ? 'ok' : 'err') +
+            row('content-type', esc(r.headers.get('content-type'))) +
+            summary +
+            '<pre>' + esc(t.slice(0, 800)) + '</pre>';
+        } catch (e) {
+          out.innerHTML = row('POST', esc(url)) + row('خطای شبکه', esc(e.message), 'err');
+        }
+      }
+
+      function copyReport() {
+        var report = {
+          env: {
+            href: window.location.href,
+            hasSDK: !!wa,
+            platform: wa && wa.platform,
+            version: wa && wa.version,
+            initDataLength: wa && wa.initData ? wa.initData.length : 0,
+            startParam: wa && wa.initDataUnsafe && wa.initDataUnsafe.start_param,
+            gate: GATE,
+            apiBase: API_BASE
+          },
+          rawInitData: wa && wa.initData ? wa.initData : null,
+          log: window.__KPANAH_LOG__ || []
+        };
+        var text = JSON.stringify(report, null, 2);
+        try {
+          navigator.clipboard.writeText(text);
+          el('authtest').innerHTML = '<span class="ok">گزارش کپی شد ✓</span>';
+        } catch (e) {
+          el('authtest').innerHTML = '<pre>' + esc(text) + '</pre>';
+        }
+      }
+
+      // ── راه‌اندازی ──────────────────────────────────────────────
+      try { if (wa) { wa.ready(); wa.expand(); } } catch (e) {}
+      renderEnv();
+      renderLog();
+
+      el('btn-health').onclick = testHealth;
+      el('btn-auth').onclick = testAuth;
+      el('btn-copy').onclick = copyReport;
+
+      // هر ۲ ثانیه لاگ را تازه کن (چون اپ اصلی در تب دیگری لاگ می‌سازد؟ خیر)
+      setInterval(renderLog, 2000);
+    </script>
+  </body>
+</html>

@@ -1,6 +1,8 @@
 import type { Env, RequestContext } from '../types';
 import { jsonSuccess, readJson } from '../lib/response';
+import { buildStartParam } from '@kpanah/shared';
 import { fulfilStarPayment } from './store';
+import { generateLinkToken, storeLinkToken } from '../lib/link-token';
 import { ContentRepository } from '../services/repository';
 import { SupabaseClient } from '../services/supabase';
 /**
@@ -99,7 +101,7 @@ export async function handleTelegramWebhook(
   }
 
   if (text.startsWith('/app') || text.startsWith('/store') || text.startsWith('/buy')) {
-    defer(context, sendAppButton(env, message.chat.id));
+    defer(context, sendAppButton(env, message.chat.id, from));
     return jsonSuccess({ ok: true }, requestId, env);
   }
 
@@ -164,13 +166,17 @@ async function handleStart(
   ].join('\n');
 
   await sendMessage(env, chatId, text, {
-    reply_markup: buildAppKeyboard(env, startParam),
+    reply_markup: await buildAuthedAppKeyboard(env, from, startParam),
   });
 }
 
-async function sendAppButton(env: Env, chatId: number): Promise<void> {
+async function sendAppButton(
+  env: Env,
+  chatId: number,
+  from: TelegramFrom | undefined
+): Promise<void> {
   await sendMessage(env, chatId, 'برای ادامه، اپلیکیشن را باز کن:', {
-    reply_markup: buildAppKeyboard(env),
+    reply_markup: await buildAuthedAppKeyboard(env, from),
   });
 }
 
@@ -224,7 +230,7 @@ async function handleSuccessfulPayment(
         ].join('\n');
 
     await sendMessage(env, telegramId, text, {
-      reply_markup: buildAppKeyboard(env),
+      reply_markup: await buildAuthedAppKeyboardFor(env, telegramId, undefined),
     });
   } else {
     // خطای پرداخت — کاربر باید مطلع شود، و ما هم لاگ داریم در QStash logs
@@ -254,15 +260,86 @@ export function buildAppKeyboard(
   startParam?: string
 ): InlineKeyboard {
   const base = env.MINI_APP_URL ?? '';
-  // start_param از deep link ربات به TMA منتقل می‌شود
-  const url = startParam ? `${base}?startapp=${encodeURIComponent(startParam)}` : base;
 
-  if (!url) {
+  if (!base) {
     return { inline_keyboard: [] };
   }
 
+  const params = new URLSearchParams();
+  // start_param از deep link ربات به TMA منتقل می‌شود
+  if (startParam) params.set('startapp', startParam);
+
+  const qs = params.toString();
+  const url = qs ? `${base}?${qs}` : base;
+
   return {
     inline_keyboard: [[{ text: '🎓 باز کردن اپلیکیشن', web_app: { url } }]],
+  };
+}
+
+/**
+ * همان دکمه، اما با توکن ورود یک‌بارمصرف.
+ *
+ * چرا لازم است؟ وقتی مینی‌اپ در BotFather ثبت نشده باشد، تلگرام
+ * `initData` نمی‌فرستد. در آن حالت کاربر با صفحه خطا روبه‌رو می‌شود.
+ * این تابع یک توکن کوتاه‌عمر می‌سازد و آن را به‌صورت `startapp` به اپ
+ * می‌رساند؛ سرور با آن هویت را تأیید می‌کند.
+ *
+ * ⚠️ توکن از طریق query string منتقل نمی‌شود چون تلگرام آن را حذف
+ * می‌کند. مسیر درست `startapp` است.
+ *
+ * اگر KV در دسترس نباشد، به دکمه ساده برمی‌گردیم (بدون توکن) تا
+ * ربات در هر شرایطی کار کند.
+ */
+export async function buildAuthedAppKeyboard(
+  env: Env,
+  from: TelegramFrom | undefined,
+  startParam?: string
+): Promise<InlineKeyboard> {
+  if (!from) return buildAppKeyboard(env, startParam);
+  return buildAuthedAppKeyboardFor(env, from.id, from.language_code, startParam);
+}
+
+/**
+ * همان دکمه با توکن، اما با شناسه خام کاربر.
+ * مسیر پرداخت فقط `telegramId` را در دست دارد (بدون آبجکت `from`).
+ */
+export async function buildAuthedAppKeyboardFor(
+  env: Env,
+  telegramId: number,
+  languageCode: string | undefined,
+  startParam?: string
+): Promise<InlineKeyboard> {
+  const base = env.MINI_APP_URL ?? '';
+  if (!base) return buildAppKeyboard(env, startParam);
+
+  const token = generateLinkToken();
+  const stored = await storeLinkToken(env, token, {
+    telegramId,
+    languageCode: normalizeLang(languageCode),
+    issuedAt: Date.now(),
+  });
+
+  // KV نبود → دست‌کم دکمه ساده را بده
+  if (!stored) {
+    return buildAppKeyboard(env, startParam);
+  }
+
+  // ⚠️ نکته حیاتی: دکمه‌های `web_app` در تلگرام **query string را
+  // حذف می‌کنند**. اگر بنویسیم `?t=<token>`، تلگرام فقط URL ثبت‌شده
+  // را باز می‌کند و توکن هرگز به اپ نمی‌رسد.
+  //
+  // تنها راه انتقال پارامتر، `startapp` است که تلگرام آن را به
+  // `tgWebAppStartParam` تبدیل می‌کند و در SDK به‌صورت
+  // `initDataUnsafe.start_param` در دسترس قرار می‌دهد.
+  //
+  // قالب در پکیج shared تعریف شده تا با سمت کلاینت یکسان بماند.
+  const merged = buildStartParam(token, startParam);
+
+  return {
+    inline_keyboard: [
+      [{ text: '🎓 باز کردن اپلیکیشن', web_app: { url: `${base}?startapp=${merged}` } }],
+    ],
   };
 }
 

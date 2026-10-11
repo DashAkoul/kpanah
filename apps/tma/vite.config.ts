@@ -45,7 +45,19 @@ export default defineConfig(({ mode }) => {
   const withMocks =
     mode === 'development' || process.env.VITE_ENABLE_MOCK === 'true';
 
+  /**
+   * Source maps are useful while debugging a production issue, but they ship
+   * the entire original TypeScript source to anyone who opens devtools.
+   * They stay off unless `VITE_SOURCEMAP=true` is set explicitly.
+   */
+  const withSourcemap = process.env.VITE_SOURCEMAP === 'true';
+
   return {
+    // مسیر پایه برای میزبانی در زیرمسیر.
+    //   Cloudflare Pages → '/'   (پیش‌فرض)
+    //   GitHub Pages     → '/<repo>/'  (مثلاً '/kpanah/')
+    // از متغیر محیطی VITE_BASE_PATH تنظیم می‌شود.
+    base: process.env.VITE_BASE_PATH || '/',
     plugins: [react(), ...(withMocks ? [] : [stripMocks()])],
     resolve: {
       alias: {
@@ -58,7 +70,7 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       target: 'es2020',
-      sourcemap: true,
+      sourcemap: withSourcemap,
       rollupOptions: {
         output: {
           manualChunks(id) {

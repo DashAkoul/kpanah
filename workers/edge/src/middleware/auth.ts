@@ -42,6 +42,7 @@ export function resolveRoute(url: URL): RouteMeta {
 function routeClassForAction(action: string): RouteClass {
   switch (action) {
     case 'auth':
+    case 'auth-link':
     case 'health':
     case 'plans':
       return 'PUBLIC';

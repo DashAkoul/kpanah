@@ -1,12 +1,23 @@
-import { authRequestSchema } from '@kpanah/shared';
+import { authRequestSchema, authLinkRequestSchema } from '@kpanah/shared';
 import { SECURITY, languageFromTelegramCode } from '@kpanah/shared';
-import type { RequestContext } from '../types';
+import type { Env, RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import { validateInitData } from '../lib/telegram-auth';
 import { signJwt } from '../lib/jwt';
+import { consumeLinkToken } from '../lib/link-token';
 import { ContentRepository, toUserProfile } from '../services/repository';
 import { SupabaseClient } from '../services/supabase';
 import { isAdminFromEnv } from './admin';
+
+/** اطلاعات کاربر تلگرام — مشترک بین دو مسیر ورود */
+interface TelegramIdentity {
+  id: number;
+  first_name: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  language_code?: string;
+}
 
 /**
  * POST /gate?action=auth
@@ -52,6 +63,76 @@ export async function handleAuth(
 
   const tgUser = validation.user;
 
+  return issueSession(env, requestId, {
+    id: tgUser.id,
+    first_name: tgUser.first_name,
+    last_name: tgUser.last_name,
+    username: tgUser.username,
+    photo_url: tgUser.photo_url,
+    language_code: tgUser.language_code,
+  });
+}
+
+/**
+ * POST /gate?action=auth-link
+ *
+ * مسیر ورود جایگزین برای زمانی که `initData` در دسترس نیست
+ * (مینی‌اپ در BotFather ثبت نشده، یا اپ در وب‌ویو ساده باز شده است).
+ *
+ * ربات در `/start` یک توکن یک‌بارمصرف می‌سازد و به URL دکمه اضافه
+ * می‌کند. اینجا آن توکن بررسی و سوزانده می‌شود.
+ */
+export async function handleAuthLink(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+
+  const body = await readJson(request);
+  const parsed = authLinkRequestSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return jsonError(
+      'VALIDATION_ERROR',
+      'token is required',
+      requestId,
+      env,
+      400
+    );
+  }
+
+  const record = await consumeLinkToken(env, parsed.data.token);
+
+  if (!record) {
+    return jsonError(
+      'INVALID_INIT_DATA',
+      'Link token is invalid, expired, or already used',
+      requestId,
+      env,
+      401,
+      'errors.invalid_session'
+    );
+  }
+
+  // نام کاربر را از تلگرام می‌گیریم تا پروفایل کامل باشد.
+  // (توکن فقط id را حمل می‌کند تا اطلاعات شخصی در URL لو نرود)
+  const fallback: TelegramIdentity = {
+    id: record.telegramId,
+    first_name: `User ${record.telegramId}`,
+    language_code: record.languageCode,
+  };
+
+  return issueSession(env, requestId, fallback);
+}
+
+/**
+ * صدور JWT + پروفایل — منطق مشترک هر دو مسیر ورود.
+ */
+async function issueSession(
+  env: Env,
+  requestId: string,
+  tgUser: TelegramIdentity
+): Promise<Response> {
   // زبان از تلگرام استخراج می‌شود؛ کاربر بعداً می‌تواند دستی تغییر دهد
   const detectedLanguage = languageFromTelegramCode(tgUser.language_code);
 
@@ -90,9 +171,14 @@ export async function handleAuth(
 
   const token = await signJwt(
     {
-      telegram_id: tgUser.id,
-      sub: user.id,
-      ui_language: user.ui_language ?? detectedLanguage,
+      // ⚠️ نام‌ها باید دقیقاً با AuthClaims بخوانند (camelCase).
+      // میدلور auth.ts این فیلدها را مستقیم روی context می‌گذارد:
+      //   telegramId: claims.telegramId
+      // اگر اینجا snake_case بنویسیم، telegramId همیشه undefined
+      // می‌شود و همه مسیرهای محافظت‌شده خطای «no identity» می‌دهند.
+      telegramId: tgUser.id,
+      userId: user.id,
+      uiLanguage: user.ui_language ?? detectedLanguage,
     },
     env.JWT_SECRET,
     SECURITY.jwtTtlSeconds

@@ -1,5 +1,75 @@
 import type { ApiResponse, ApiErrorCode } from '@kpanah/shared';
-import { getWebApp, isTelegram } from './telegram';
+import {
+  getWebApp,
+  isTelegram,
+  readLinkToken,
+  stripLinkTokenFromUrl,
+} from './telegram';
+
+/**
+ * ─────────────────────────────────────────────────────────────────────
+ *  Debug tracer
+ *
+ *  Enabled when BOTH:
+ *    • VITE_DEBUG_API === 'true'   (build/dev-time flag), or DEV mode
+ *
+ *  When on, every API call and auth decision is logged to the console
+ *  with a `[kpanah:api]` prefix AND appended to `window.__KPANAH_LOG__`
+ *  so it can be copied out of the Mini App (where devtools are hard to
+ *  open). This is how we diagnose the real Telegram client, which sends
+ *  a different initData blob than any local test.
+ * ─────────────────────────────────────────────────────────────────────
+ */
+const DEBUG_API =
+  import.meta.env.VITE_DEBUG_API === 'true' || Boolean(import.meta.env.DEV);
+
+export interface TraceEntry {
+  t: string;
+  kind: 'request' | 'response' | 'error' | 'auth';
+  data: Record<string, unknown>;
+}
+
+declare global {
+  interface Window {
+    __KPANAH_LOG__?: TraceEntry[];
+  }
+}
+
+function trace(kind: TraceEntry['kind'], data: Record<string, unknown>): void {
+  if (!DEBUG_API) return;
+  const entry: TraceEntry = { t: new Date().toISOString(), kind, data };
+  try {
+    if (typeof window !== 'undefined') {
+      window.__KPANAH_LOG__ = window.__KPANAH_LOG__ ?? [];
+      window.__KPANAH_LOG__.push(entry);
+    }
+  } catch {
+    // ignore
+  }
+  // eslint-disable-next-line no-console
+  console.log(`[kpanah:api] ${kind}`, data);
+}
+
+/**
+ * Snapshot of the client environment — the first thing to look at when
+ * auth fails: is initData present, what platform, what API base.
+ */
+export function debugSnapshot(): Record<string, unknown> {
+  const wa = getWebApp();
+  return {
+    apiBase: API_BASE,
+    gatePath: GATE_PATH,
+    location: typeof window !== 'undefined' ? window.location.href : '(no window)',
+    hasTelegramSDK: Boolean(wa),
+    platform: wa?.platform ?? null,
+    version: wa?.version ?? null,
+    initDataLength: wa?.initData ? wa.initData.length : 0,
+    initDataPreview: wa?.initData ? wa.initData.slice(0, 60) + '…' : null,
+    startParam: wa?.initDataUnsafe?.start_param ?? null,
+    hasLinkToken: Boolean(readLinkToken()),
+  };
+}
+
 
 /**
  * API client for the Edge Gateway.
@@ -11,7 +81,34 @@ import { getWebApp, isTelegram } from './telegram';
  */
 
 const GATE_PATH = import.meta.env.VITE_GATE_PATH ?? '/kpanah56/8fjg7rfb/v1/gate';
-const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
+
+/**
+ * API origin. Must point at the Edge Worker, NOT the Pages origin.
+ *
+ * ⚠️ If this is left empty the client makes *relative* calls to the Pages
+ * origin, where there is no `/kpanah56/.../gate` route → Cloudflare Pages
+ * returns a 404 HTML page → `response.json()` throws → the user sees
+ * "Temporary server issue" forever, even though the Worker is healthy.
+ *
+ * The build is supposed to set VITE_API_BASE (see SETUP_GUIDE.md), but we
+ * keep an explicit fallback to the public Worker URL so a forgotten env var
+ * can never silently break login again.
+ */
+const API_BASE =
+  (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '') ||
+  'https://kpanah-lang-edge.language-app-backend.workers.dev';
+
+// برای صفحهٔ عیب‌یابی `/debug.html` — مقدار واقعی API_BASE را روی window
+// می‌گذاریم تا بتوانیم از داخل مینی‌اپ واقعی هم آن را ببینیم.
+try {
+  if (typeof window !== 'undefined') {
+    (window as unknown as Record<string, unknown>).__KPANAH_API_BASE__ = API_BASE;
+    (window as unknown as Record<string, unknown>).__KPANAH_GATE__ = GATE_PATH;
+  }
+} catch {
+  // ignore
+}
+
 
 const TOKEN_KEY = 'kpanah.jwt';
 
@@ -77,6 +174,8 @@ export async function callApi<T>(
 
   const url = `${API_BASE}${GATE_PATH}?action=${encodeURIComponent(action)}`;
 
+  trace('request', { action, method, url, anonymous });
+
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -100,6 +199,12 @@ export async function callApi<T>(
     });
   } catch (err) {
     if ((err as Error)?.name === 'AbortError') throw err;
+    trace('error', {
+      action,
+      url,
+      reason: 'network-fetch-threw',
+      error: (err as Error)?.message,
+    });
     throw new ApiClientError(
       'INTERNAL_ERROR',
       'Network request failed',
@@ -107,6 +212,13 @@ export async function callApi<T>(
       'errors.network'
     );
   }
+
+  trace('response', {
+    action,
+    url,
+    status: response.status,
+    contentType: response.headers.get('content-type'),
+  });
 
   // پاسخ رمزنگاری‌شده (لایه اختیاری) — فعلاً خاموش است
   if (response.headers.get('X-Payload-Encrypted') === '1') {
@@ -119,8 +231,23 @@ export async function callApi<T>(
 
   let json: ApiResponse<T>;
   try {
-    json = (await response.json()) as ApiResponse<T>;
-  } catch {
+    // متن خام را جدا می‌خوانیم تا اگر HTML بود (مثلاً 404 صفحات Pages)
+    // دقیقاً ببینیم چه چیزی برگشته — این همان چیزی است که «server_error»
+    // مبهم را توضیح می‌دهد.
+    const rawText = await response.text();
+    trace('response', {
+      action,
+      rawPreview: rawText.slice(0, 300),
+      rawLength: rawText.length,
+    });
+    json = JSON.parse(rawText) as ApiResponse<T>;
+  } catch (err) {
+    trace('error', {
+      action,
+      reason: 'malformed-response-not-json',
+      status: response.status,
+      error: (err as Error)?.message,
+    });
     throw new ApiClientError(
       'INTERNAL_ERROR',
       `Malformed response (${response.status})`,
@@ -129,7 +256,10 @@ export async function callApi<T>(
     );
   }
 
-  if (json.ok) return json.data;
+  if (json.ok) {
+    trace('response', { action, ok: true });
+    return json.data;
+  }
 
   const error = json.error;
 
@@ -140,6 +270,15 @@ export async function callApi<T>(
   ) {
     setToken(null);
   }
+
+  trace('error', {
+    action,
+    ok: false,
+    code: error.code,
+    message: error.message,
+    status: response.status,
+    userMessageKey: error.userMessageKey,
+  });
 
   throw new ApiClientError(
     error.code,
@@ -166,7 +305,12 @@ export interface AuthResult<T> {
 export async function authenticate(): Promise<AuthResult<unknown>> {
   const wa = getWebApp();
 
+  trace('auth', { step: 'begin', snapshot: debugSnapshot() });
+
+  // ── مسیر ۱: مسیر استاندارد ────────────────────────────────────────
+  // تلگرام امضای هویت (initData) را فرستاده است.
   if (isTelegram() && wa?.initData) {
+    trace('auth', { step: 'path1-standard-initdata', len: wa.initData.length });
     return callApi<AuthResult<unknown>>('auth', {
       method: 'POST',
       body: { initData: wa.initData },
@@ -176,14 +320,57 @@ export async function authenticate(): Promise<AuthResult<unknown>> {
 
   // ── حالت پیش‌نمایش ────────────────────────────────────────────────
   if (import.meta.env.VITE_ENABLE_MOCK === 'true' || import.meta.env.DEV) {
+    trace('auth', { step: 'preview-mock' });
     return mockAuth();
   }
 
+  // ── مسیر ۲: توکن یک‌بارمصرف لینک ─────────────────────────────────
+  // این مسیر برای زمانی است که مینی‌اپ در BotFather ثبت نشده و
+  // در نتیجه initData خالی است. ربات توکن را در URL گذاشته است.
+  const linkToken = readLinkToken();
+  trace('auth', { step: 'path2-link-token', hasLinkToken: Boolean(linkToken) });
+  if (linkToken) {
+    try {
+      const result = await callApi<AuthResult<unknown>>('auth-link', {
+        method: 'POST',
+        body: { token: linkToken },
+        anonymous: true,
+      });
+      // توکن یک‌بارمصرف است — از URL پاکش کن
+      stripLinkTokenFromUrl();
+      return result;
+    } catch (err) {
+      trace('auth', {
+        step: 'path2-link-token-failed',
+        error: (err as Error)?.message,
+      });
+      stripLinkTokenFromUrl();
+      // اگر توکن منقضی/مصرف‌شده بود، به تشخیص دقیق ادامه بده
+    }
+  }
+
+  // ── تشخیص دقیق: چرا initData نداریم؟ ─────────────────────────────
+  // این خطاها ظاهر یکسانی دارند اما علت‌شان کاملاً متفاوت است؛ پیام
+  // اشتباه کاربر را ساعت‌ها به دنبال مشکل اینترنت می‌فرستد.
+  if (!wa) {
+    trace('auth', { step: 'fail-no-sdk' });
+    throw new ApiClientError(
+      'INVALID_INIT_DATA',
+      'Telegram SDK unavailable — the web app script did not load',
+      401,
+      'errors.open_in_telegram'
+    );
+  }
+
+  // SDK هست ولی initData خالی است. علت‌های رایج:
+  //   1. کاربر لینک را در مرورگر عادی باز کرده
+  //   2. اپ از دکمه‌ای باز شده که توکن ندارد و مینی‌اپ هم ثبت نشده
+  trace('auth', { step: 'fail-empty-initdata', platform: wa.platform });
   throw new ApiClientError(
     'INVALID_INIT_DATA',
-    'This app must be opened inside Telegram',
+    `initData is empty (platform=${wa.platform})`,
     401,
-    'errors.open_in_telegram'
+    'errors.init_data_missing'
   );
 }
 

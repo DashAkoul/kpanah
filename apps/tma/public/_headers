@@ -1,0 +1,31 @@
+# ═══════════════════════════════════════════════════════════════════
+#  Security headers — Cloudflare Pages
+#
+#  نکته مهم: Mini App در iframe تلگرام اجرا می‌شود، بنابراین
+#  X-Frame-Options را تنظیم نمی‌کنیم (وگرنه اپ لود نمی‌شود).
+#  به جای آن با frame-ancestors اجازه فقط به تلگرام می‌دهیم.
+#
+#  ⚠️ عمداً هیچ Content-Security-Policy سختگیرانه ای روی script-src
+#  نمی‌گذاریم: مینی اپ به telegram-web-app.js از telegram.org و به
+#  API روی workers.dev نیاز دارد. فقط frame-ancestors را محدود می‌کنیم.
+# ═══════════════════════════════════════════════════════════════════
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  Content-Security-Policy: frame-ancestors 'self' https://web.telegram.org https://*.telegram.org
+
+# فایل های هش شده — کش طولانی و غیرقابل تغییر
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# HTML و صفحه تشخیص — همیشه تازه، تا دیپلوی جدید فوراً دیده شود
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/debug.html
+  Cache-Control: no-cache

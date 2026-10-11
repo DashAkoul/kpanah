@@ -168,7 +168,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://kpanah-lang-edge.<subdomain>.workers.dev/kpanah56/8fjg7rfb/v1/gate/telegram/webhook",
+    "url": "https://kpanah-lang-edge.language-app-backend.workers.dev/kpanah56/8fjg7rfb/v1/gate/telegram/webhook",
     "secret_token": "<TELEGRAM_WEBHOOK_SECRET>",
     "allowed_updates": ["message", "pre_checkout_query", "successful_payment"]
   }'
@@ -177,7 +177,7 @@ curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_ADMIN_BOT_TOKEN>/setWebhook" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://kpanah-lang-edge.<subdomain>.workers.dev/kpanah56/8fjg7rfb/v1/gate/telegram/admin-webhook",
+    "url": "https://kpanah-lang-edge.language-app-backend.workers.dev/kpanah56/8fjg7rfb/v1/gate/telegram/admin-webhook",
     "secret_token": "<TELEGRAM_WEBHOOK_SECRET>"
   }'
 ```
@@ -307,7 +307,7 @@ QStash باعث می‌شود تولید چرخه جدید (که ممکن است
 فقط یک Destination لازم است که به ورکر شما اشاره کند:
 
 ```
-https://kpanah-lang-edge.<subdomain>.workers.dev/kpanah56/8fjg7rfb/v1/gate/internal/queue?internal=generate-cycle
+https://kpanah-lang-edge.language-app-backend.workers.dev/kpanah56/8fjg7rfb/v1/gate/internal/queue?internal=generate-cycle
 ```
 
 > **اگر QStash را تنظیم نکنید:** برنامه همچنان کار می‌کند، اما تولید چرخه جدید
@@ -403,7 +403,7 @@ npx wrangler deploy -c workers/edge/wrangler.toml
 ```
 Uploaded kpanah-lang-edge (3.42 sec)
 Published kpanah-lang-edge
-  https://kpanah-lang-edge.<subdomain>.workers.dev
+  https://kpanah-lang-edge.language-app-backend.workers.dev
 ```
 
 **این URL را کپی کنید** — در مراحل بعد لازم است.
@@ -414,7 +414,7 @@ Published kpanah-lang-edge
 
 ```toml
 [vars]
-SELF_URL = "https://kpanah-lang-edge.<subdomain>.workers.dev"
+SELF_URL = "https://kpanah-lang-edge.language-app-backend.workers.dev"
 MINI_APP_URL = "https://kpanah-lang.pages.dev"
 ```
 
@@ -427,7 +427,7 @@ npx wrangler deploy -c workers/edge/wrangler.toml
 ## ۶.۳ تست سلامت ورکر
 
 ```bash
-curl "https://kpanah-lang-edge.<subdomain>.workers.dev/kpanah56/8fjg7rfb/v1/gate?action=health"
+curl "https://kpanah-lang-edge.language-app-backend.workers.dev/kpanah56/8fjg7rfb/v1/gate?action=health"
 ```
 
 انتظار:
@@ -445,7 +445,7 @@ curl "https://kpanah-lang-edge.<subdomain>.workers.dev/kpanah56/8fjg7rfb/v1/gate
 ```bash
 # build با URL واقعی ورکر
 cd apps/tma
-VITE_API_BASE="https://kpanah-lang-edge.<subdomain>.workers.dev" npm run build
+VITE_API_BASE="https://kpanah-lang-edge.language-app-backend.workers.dev" npm run build
 
 # deploy
 npx wrangler pages deploy dist --project-name=kpanah-lang
@@ -468,7 +468,7 @@ https://kpanah-lang.pages.dev
    - **Root directory:** `/` (ریشه monorepo)
 4. Environment variable اضافه کنید:
    ```
-   VITE_API_BASE = https://kpanah-lang-edge.<subdomain>.workers.dev
+   VITE_API_BASE = https://kpanah-lang-edge.language-app-backend.workers.dev
    ```
 5. Save and Deploy
 
@@ -511,7 +511,7 @@ https://kpanah-lang.pages.dev
 ## ۷.۱ تست ورکر
 
 ```bash
-BASE="https://kpanah-lang-edge.<subdomain>.workers.dev/kpanah56/8fjg7rfb/v1/gate"
+BASE="https://kpanah-lang-edge.language-app-backend.workers.dev/kpanah56/8fjg7rfb/v1/gate"
 
 # سلامت
 curl "$BASE?action=health"

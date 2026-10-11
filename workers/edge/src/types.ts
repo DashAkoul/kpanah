@@ -54,7 +54,14 @@ export interface Env {
   CACHE_KV?: KVNamespace;
 }
 
-/** داده‌ای که از initData تلگرام استخراج و در JWT قرار می‌گیرد */
+/**
+ * داده‌ای که در JWT قرار می‌گیرد.
+ *
+ * ⚠️ این نام‌ها باید دقیقاً با آنچه `signJwt` می‌نویسد یکی باشد.
+ * میدلور `middleware/auth.ts` مقادیر را مستقیم روی RequestContext
+ * کپی می‌کند (`telegramId: claims.telegramId`)، پس هر اختلاف
+ * snake_case/camelCase باعث undefined شدن هویت می‌شود.
+ */
 export interface AuthClaims {
   /** لازم است تا با JwtPayload سازگار باشد */
   [key: string]: unknown;

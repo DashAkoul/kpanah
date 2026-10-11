@@ -6,6 +6,11 @@
  * `isAvailable` guard instead of `window.Telegram` directly.
  */
 
+import {
+  extractTokenFromStartParam,
+  extractStartParam,
+} from '@kpanah/shared';
+
 export interface TelegramWebApp {
   initData: string;
   initDataUnsafe: {
@@ -229,4 +234,89 @@ export function getTelegramLanguage(): string | undefined {
 
 export function getStartParam(): string | undefined {
   return getWebApp()?.initDataUnsafe?.start_param;
+}
+
+/**
+ * توکن ورود یک‌بارمصرف را استخراج می‌کند.
+ *
+ * ⚠️ نکته مهم درباره تلگرام:
+ * دکمه‌های `web_app` **query string را حذف می‌کنند**. پس `?t=<token>`
+ * هرگز به اپ نمی‌رسد. تنها مسیر قابل‌اعتماد `startapp` است که تلگرام
+ * آن را به `tgWebAppStartParam` تبدیل می‌کند.
+ *
+ * قالب دریافتی:
+ *   t_<token>                → فقط توکن
+ *   t_<token>_<startParam>   → توکن + پارامتر deep-link اصلی
+ *
+ * برای سازگاری، `?t=` مستقیم هم بررسی می‌شود (مثلاً وقتی لینک را
+ * دستی در مرورگر باز می‌کنیم یا در حالت دسکتاپ).
+ */
+export function readLinkToken(): string | null {
+  try {
+    // ۱. مسیر مستقیم (مرورگر / لینک دستی)
+    const url = new URL(window.location.href);
+    const direct = url.searchParams.get('t');
+    if (direct) return direct;
+
+    // ۲. مسیر تلگرام — از hash خام بخوان (مطمئن‌ترین منبع)
+    const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+    const fromHash = new URLSearchParams(rawHash).get('tgWebAppStartParam');
+    const parsedHash = extractTokenFromStartParam(fromHash);
+    if (parsedHash) return parsedHash;
+
+    // ۳. از SDK (همان مقدار، ولی نرمال‌شده توسط تلگرام)
+    return extractTokenFromStartParam(getStartParam() ?? null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * پارامتر deep-link اصلی (بدون توکن) را برمی‌گرداند.
+ * اگر ربات `t_<token>_<startParam>` فرستاده باشد، اینجا startParam
+ * جدا می‌شود تا منطق اپ (مثلاً باز کردن مستقیم فروشگاه) کار کند.
+ */
+export function readStartParam(): string | undefined {
+  try {
+    const url = new URL(window.location.href);
+    const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+    const value =
+      new URLSearchParams(rawHash).get('tgWebAppStartParam') ??
+      getStartParam() ??
+      null;
+
+    return extractStartParam(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** توکن را از نوار آدرس پاک می‌کند (بدون reload) */
+export function stripLinkTokenFromUrl(): void {
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+
+    if (url.searchParams.has('t')) {
+      url.searchParams.delete('t');
+      changed = true;
+    }
+
+    // پارامتر تلگرام در hash است — آن را هم تمیز کن تا توکن
+    // یک‌بارمصرف در history باقی نماند.
+    if (url.hash) {
+      const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash;
+      const hp = new URLSearchParams(rawHash);
+      if (hp.has('tgWebAppStartParam')) {
+        hp.delete('tgWebAppStartParam');
+        const rest = hp.toString();
+        url.hash = rest ? `#${rest}` : '';
+        changed = true;
+      }
+    }
+
+    if (changed) window.history.replaceState({}, '', url.toString());
+  } catch {
+    // ignore
+  }
 }

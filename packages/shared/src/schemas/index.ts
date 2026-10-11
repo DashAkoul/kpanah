@@ -196,6 +196,14 @@ export const authRequestSchema = z.object({
   initData: z.string().min(10),
 });
 
+/**
+ * ورود با توکن یک‌بارمصرف لینک (وقتی initData در دسترس نیست).
+ * توکن base64url با ۳۲ بایت آنتروپی است → ۴۳ کاراکتر.
+ */
+export const authLinkRequestSchema = z.object({
+  token: z.string().min(16).max(128),
+});
+
 export const onboardingRequestSchema = z.object({
   uiLanguage: uiLanguageSchema,
   targetLanguage: targetLanguageSchema,

@@ -64,7 +64,16 @@ async function bump(
   limit: number
 ): Promise<RateLimitResult> {
   if (env.RATE_LIMIT_KV) {
-    return bumpKV(env.RATE_LIMIT_KV, key, windowSeconds, limit);
+    // KV can fail transiently (eventual consistency, quota, cold isolate).
+    // Rate limiting is a safety net, not a correctness requirement — a KV
+    // hiccup must never take down the whole API. Fall back to the per-isolate
+    // counter and let the request through.
+    try {
+      return await bumpKV(env.RATE_LIMIT_KV, key, windowSeconds, limit);
+    } catch (err) {
+      console.warn('rate-limit: KV unavailable, falling back to memory', err);
+      return bumpMemory(key, windowSeconds, limit);
+    }
   }
   return bumpMemory(key, windowSeconds, limit);
 }

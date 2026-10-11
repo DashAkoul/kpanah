@@ -53,13 +53,31 @@ export async function validateInitData(
   }
 
   // ── 1. بازسازی data_check_string ──────────────────────────────────
-  const entries: [string, string][] = [];
-  for (const [key, value] of params.entries()) {
-    if (key === 'hash' || key === 'signature') continue;
-    entries.push([key, value]);
-  }
-  entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const dataCheckString = entries.map(([k, v]) => `${k}=${v}`).join('\n');
+  //
+  //  ⚠️ نکتهٔ حیاتی دربارهٔ کلاینت‌های جدید تلگرام:
+  //
+  //  کلاینت‌های قدیمی: فقط `hash` از محاسبه حذف می‌شد.
+  //  کلاینت‌های جدید (tdesktop ≥ 9.6، موبایل‌های اخیر) یک فیلد
+  //  `signature` اضافه کرده‌اند که **بخشی از دادهٔ امضاشده است** و
+  //  باید در data_check_string بماند.
+  //
+  //  اگر همیشه `signature` را حذف کنیم، هش کاربران کلاینت جدید
+  //  مطابقت نمی‌کند و ورود با «Temporary server issue» شکست می‌خورد.
+  //
+  //  راه‌حل: هر دو حالت را حساب می‌کنیم و اگر هرکدام مطابق بود،
+  //  معتبر است. این هم با کلاینت قدیم و هم جدید سازگار است.
+  const buildDataCheckString = (includeSignature: boolean): string => {
+    const entries: [string, string][] = [];
+    for (const [key, value] of params.entries()) {
+      if (key === 'hash') continue;
+      if (key === 'signature' && !includeSignature) continue;
+      entries.push([key, value]);
+    }
+    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    return entries.map(([k, v]) => `${k}=${v}`).join('\n');
+  };
+
+  const hasSignature = params.has('signature');
 
   // ── 2. کلید مخفی ──────────────────────────────────────────────────
   const secretKey = await hmacSha256(
@@ -67,12 +85,24 @@ export async function validateInitData(
     new TextEncoder().encode(botToken)
   );
 
-  // ── 3. امضای مورد انتظار ──────────────────────────────────────────
-  const expectedHash = bytesToHex(
-    await hmacSha256(secretKey, new TextEncoder().encode(dataCheckString))
-  );
+  const computeHash = async (dataCheckString: string): Promise<string> =>
+    bytesToHex(
+      await hmacSha256(secretKey, new TextEncoder().encode(dataCheckString))
+    );
 
-  if (!timingSafeEqualHex(expectedHash, hash.toLowerCase())) {
+  // ── 3. امضای مورد انتظار ──────────────────────────────────────────
+  // ابتدا حالت «با signature» (کلاینت جدید)، سپس حالت «بدون signature».
+  const hashWithSig = await computeHash(buildDataCheckString(true));
+  const hashWithoutSig = hasSignature
+    ? await computeHash(buildDataCheckString(false))
+    : hashWithSig;
+
+  const given = hash.toLowerCase();
+  const matches =
+    timingSafeEqualHex(hashWithSig, given) ||
+    timingSafeEqualHex(hashWithoutSig, given);
+
+  if (!matches) {
     return { ok: false, error: 'hash mismatch — initData was not signed by this bot' };
   }
 

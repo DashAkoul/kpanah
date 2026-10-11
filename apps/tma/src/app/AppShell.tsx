@@ -63,17 +63,24 @@ export function AppShell() {
             />
           ))}
         </div>
+        {/* اگر بیش از ۸ ثانیه طول کشید، احتمالاً یک جای اتصال خراب است */}
+        <SlowHint />
       </div>
     );
   }
 
   if (status === 'unauthenticated' || status === 'error') {
     return (
-      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 px-8 text-center">
+      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 px-6 text-center">
         <div className="text-5xl">🔐</div>
         <p className="text-sm text-text-hint">
           {authError ? t(authError) : t('errors.invalid_session')}
         </p>
+
+        {/* در محیطی که initData وجود ندارد، گفتن «اینترنت را چک کن» گمراه‌کننده
+            است. تشخیص می‌دهیم و راهنمای دقیق می‌دهیم. */}
+        <OpenHelp />
+
         <Button variant="secondary" size="sm" onClick={() => window.location.reload()}>
           {t('common.retry')}
         </Button>
@@ -171,4 +178,86 @@ export interface ResultData {
   cycleCompleted: boolean;
   nextCycleTriggered: boolean;
   appLocked: boolean;
+}
+
+/**
+ * بعد از ۸ ثانیه انتظار، یک راهنما نشان می‌دهد که کاربر بی‌نتیجه منتظر نماند.
+ * علت رایج: مینی‌اپ در BotFather ثبت نشده و درخواست به‌دلیل نبودِ initData
+ * رد می‌شود، یا اصلاً اپ داخل تلگرام باز نشده.
+ */
+function SlowHint() {
+  const { t } = useTranslation();
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    const id = setTimeout(() => setSlow(true), 8000);
+    return () => clearTimeout(id);
+  }, []);
+
+  if (!slow) return null;
+
+  const insideTelegram = Boolean(window.Telegram?.WebApp?.initData);
+
+  return (
+    <div className="mt-4 max-w-[22rem] rounded-xl border border-border bg-surface p-3 text-right">
+      <p className="mb-2 text-xs font-semibold text-text">
+        {t('errors.slow_title')}
+      </p>
+      <p className="mb-2 text-[11px] leading-relaxed text-text-hint">
+        {insideTelegram ? t('errors.slow_inside') : t('errors.slow_outside')}
+      </p>
+      <a
+        href="/diag.html"
+        className="text-[11px] font-semibold text-accent underline"
+      >
+        {t('errors.open_diag')}
+      </a>
+    </div>
+  );
+}
+
+/**
+ * وقتی احراز هویت رد می‌شود، علت را از محیط تشخیص می‌دهیم و به‌جای
+ * «اینترنت را چک کن» راهنمای درست می‌دهیم.
+ *
+ * توجه: اگر توکن یک‌بارمصرف در URL بود، api.ts خودش آن را مصرف می‌کند
+ * و کاربر هیچ‌وقت به این صفحه نمی‌رسد. پس رسیدن به اینجا یعنی یا
+ * توکن نبوده، یا مصرف/منقضی شده است.
+ */
+function OpenHelp() {
+  const { t } = useTranslation();
+  const wa = window.Telegram?.WebApp;
+
+  // SDK نیست → اسکریپت تلگرام لود نشده (فیلترشکن یا مسدودی)
+  if (!wa) {
+    return (
+      <div className="mt-2 max-w-[22rem] rounded-xl border border-border bg-surface p-3 text-right">
+        <p className="text-[11px] leading-relaxed text-text-hint">
+          {t('errors.telegram_sdk_missing')}
+        </p>
+      </div>
+    );
+  }
+
+  // SDK هست ولی initData خالی → کاربر از مرورگر باز کرده
+  if (!wa.initData) {
+    return (
+      <div className="mt-2 max-w-[22rem] rounded-xl border border-border bg-surface p-3 text-right">
+        <p className="mb-1.5 text-xs font-semibold text-text">
+          {t('errors.opened_in_browser_title')}
+        </p>
+        <p className="mb-2 text-[11px] leading-relaxed text-text-hint">
+          {t('errors.not_registered_body')}
+        </p>
+        <a
+          href="/diag.html"
+          className="text-[11px] font-semibold text-accent underline"
+        >
+          {t('errors.open_diag')}
+        </a>
+      </div>
+    );
+  }
+
+  return null;
 }

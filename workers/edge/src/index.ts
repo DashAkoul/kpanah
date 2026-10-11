@@ -10,7 +10,7 @@ import { resolveRoute, authenticate } from './middleware/auth';
 import { enforceRateLimit } from './middleware/rate-limit';
 import { scanPayloadForInjection } from './middleware/content-filter';
 
-import { handleAuth, handleMe, handleHealth } from './routes/auth';
+import { handleAuth, handleAuthLink, handleMe, handleHealth } from './routes/auth';
 import {
   handleHome,
   handleGetTodayLesson,
@@ -84,8 +84,14 @@ export default {
 
     try {
       // ── 3. rate limit ─────────────────────────────────────────────
-      const limited = await enforceRateLimit(request, baseContext);
-      if (limited) return withCors(limited, origin);
+      // Rate limiting is advisory: if it fails, we prefer serving the
+      // request over a hard 500 for every caller.
+      try {
+        const limited = await enforceRateLimit(request, baseContext);
+        if (limited) return withCors(limited, origin);
+      } catch (err) {
+        console.warn(`[${requestId}] rate limit skipped:`, err);
+      }
 
       // ── 4. auth ───────────────────────────────────────────────────
       const auth = await authenticate(request, env, requestId, route.routeClass);
@@ -208,6 +214,8 @@ async function dispatch(
     // auth & profile
     case 'auth':
       return handleAuth(request, context);
+    case 'auth-link':
+      return handleAuthLink(request, context);
     case 'me':
       return handleMe(request, context);
     case 'health':

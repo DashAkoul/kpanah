@@ -11,10 +11,18 @@ build/
 .env.*.local
 !.env.example
 
+# Wrangler local dev secrets (contains real keys)
+.dev.vars
+**/.dev.vars
+
 *.log
 npm-debug.log*
 .DS_Store
 Thumbs.db
+
+# Vite temp config files
+*.mjs.timestamp-*
+vite.config.*.mjs
 
 coverage/
 .nyc_output/

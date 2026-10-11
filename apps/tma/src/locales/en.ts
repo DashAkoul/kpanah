@@ -222,6 +222,26 @@ export default {
       session_expired: 'Session expired. Please sign in again.',
       invalid_session: 'Invalid session. Open the app from Telegram.',
       open_in_telegram: 'This app must be opened inside Telegram.',
+      miniapp_not_registered:
+        'The Mini App is not registered in BotFather yet. An admin must register it with /newapp.',
+      init_data_missing:
+        'Telegram did not send login data. Open the app from the bot\u2019s Mini App button (not a browser).',
+
+      slow_title: 'This is taking longer than usual',
+      slow_inside:
+        'The app is open inside Telegram but the server is not responding. Usually this means the Mini App is not registered in BotFather yet.',
+      slow_outside:
+        'The app is not open inside Telegram. It must be opened from the bot\u2019s Mini App button or a t.me link.',
+      open_diag: 'Open the diagnostic page (diag)',
+
+      telegram_sdk_missing:
+        'The Telegram library failed to load. Access to telegram.org may be blocked — check your connection.',
+      opened_in_browser_title: 'Opened in a browser, not in Telegram',
+      opened_in_browser_body:
+        'You opened this URL in a browser. The app must be opened from inside Telegram so login data is sent. Open the bot and tap the Mini App button.',
+      not_registered_title: 'Mini App not registered in BotFather',
+      not_registered_body:
+        'To sign in, open the bot in Telegram and tap the "🎓 Open the app" button. If you still see this message, send /start once to generate a fresh login link.',
       account_blocked: 'Your account has been blocked.',
       subscription_required:
         'Your trial has ended. Subscribe to keep learning.',

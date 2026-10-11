@@ -45,8 +45,8 @@ preview_id = "49474852f40b480d8acaf20becbc792c"
 # ─────────────────────────────────────────────────────────────────────
 
 [vars]
-MINI_APP_URL = "https://your-tma.vercel.app"
-SELF_URL = "https://kpanah-lang-edge.YOUR-SUBDOMAIN.workers.dev"
+MINI_APP_URL = "https://kpanah-lang.pages.dev"
+SELF_URL = "https://kpanah-lang-edge.language-app-backend.workers.dev"
 GATE_PATH = "/kpanah56/8fjg7rfb/v1/gate"
 AI_PRIMARY_MODEL = "gemini-2.5-flash"
 AI_FALLBACK_MODELS = "deepseek-chat,claude-3-5-sonnet-latest"

@@ -94,7 +94,7 @@ const GATE_PATH = import.meta.env.VITE_GATE_PATH ?? '/kpanah56/8fjg7rfb/v1/gate'
  * keep an explicit fallback to the public Worker URL so a forgotten env var
  * can never silently break login again.
  */
-const API_BASE =
+export const API_BASE =
   (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '') ||
   'https://api.infolange.kdns.fr';
 

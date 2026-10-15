@@ -51,6 +51,7 @@ import {
 } from './routes/admin';
 import { handleMessagesList, handleMessagesRead } from './routes/messages';
 import { runLessonGeneration } from './routes/learn';
+import { handleMediaSpeak, handleMediaFile, isMediaRequest } from './routes/media';
 import {
   runHourlyMaintenance,
   runBackgroundGeneration,
@@ -99,6 +100,27 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // ── ۱.۵) مسیرهای رسانه (صوت) ────────────────────────────────────
+    // ⚠️ قبل از دروازهٔ اصلی چک می‌شود: GET فایل باید بدون auth کار کند
+    // (کلید از هش متن ساخته شده و محتوای عمومی است)، و POST تولید صوت
+    // می‌تواند ناشناس بماند چون کل اثر، تولید است نه افشای داده.
+    const media = isMediaRequest(url);
+    if (media) {
+      try {
+        if (media.route === 'speak' && request.method === 'POST') {
+          return await handleMediaSpeak(request, { env, requestId });
+        }
+        if (media.route === 'file' && request.method === 'GET' && media.key) {
+          return await handleMediaFile(media.key, { env, requestId });
+        }
+        return new Response('Not Found', { status: 404 });
+      } catch (err) {
+        console.error(`[${requestId}] media route failed:`, err);
+        return new Response('Media Error', { status: 500 });
+      }
+    }
+
     const route = resolveRoute(url);
 
     // ── 2. مسیر ناشناخته → پاسخ مبهم (اطلاعات لو نمی‌دهیم) ─────────
@@ -241,9 +263,13 @@ export default {
 
       try {
         if (body?.kind === 'generate-cycle' && body.userId && typeof body.cycleNumber === 'number') {
+          // ⚠️ اگر Workflow فعال باشد، این پیام تولید شده چون Circuit Breaker
+          // صف را به‌عنوان fallback برداشت. اول بررسی کن آخرین چرخه هنوز
+          // GENERATING است (Workflow در حال کارش) یا کاملاً تمام شده.
+          // اگر چرخه در انتظار بود یعنی Workflow شکست خورده و ما جانشینیم.
           const res = await runCycleGeneration(env, body.userId, body.cycleNumber);
           if (!res.ok) {
-            // اگر موقتاً خطا داد، retry (m Times رسید به DLQ می‌رود)
+            // اگر موقتاً خطا داد، retry (محدودیت retry رسید به DLQ می‌رود)
             msg.retry();
           }
         } else if (

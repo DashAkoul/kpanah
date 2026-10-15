@@ -4,7 +4,9 @@ import clsx from 'clsx';
 import type { Lesson, PatternDrillItem, ApplicationQuestion } from '@kpanah/shared';
 import { Card, Button, ProgressBar } from '../../components/ui';
 import { useLessonSession } from '../../store/session';
+import { useSessionStore } from '../../store/session';
 import { haptic } from '../../lib/telegram';
+import { useAudio } from '../../hooks/useAudio';
 
 /**
  * Lesson player.
@@ -228,6 +230,39 @@ function Part1Actions({
   );
 }
 
+/** دکمهٔ پخش تلفظ — از speakText استفاده می‌کند (اگر موجود باشد) */
+function SpeakButton({ text }: { text: string }) {
+  const { t } = useTranslation();
+  const { play, loading, playing } = useAudio();
+  const targetLanguage = useSessionStore((s) => s.user?.targetLanguage);
+
+  const busy = loading || playing;
+  const icon = loading ? '⏳' : playing ? '🔈' : '🔊';
+  const label = loading
+    ? t('lesson.loadingAudio')
+    : playing
+      ? t('lesson.playing')
+      : t('lesson.listen');
+
+  return (
+    <button
+      type="button"
+      disabled={loading}
+      onClick={() => {
+        haptic('tap');
+        void play(text, targetLanguage ?? 'en');
+      }}
+      className={clsx(
+        'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition active:scale-95',
+        busy ? 'bg-[var(--surface-sunken)] text-text-muted' : 'bg-brand-50 text-brand-600'
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 function PatternItemView({
   item,
   revealed,
@@ -250,6 +285,10 @@ function PatternItemView({
         <h2 className="target-text mt-2 text-2xl font-bold leading-tight text-text" dir="ltr">
           {item.term}
         </h2>
+
+        <div className="mt-2 flex items-center justify-center gap-2">
+          <SpeakButton text={item.speakText ?? item.term} />
+        </div>
 
         {item.pronunciation && (
           <p className="target-text mt-1 text-xs text-text-muted" dir="ltr">

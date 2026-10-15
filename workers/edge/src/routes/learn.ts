@@ -522,8 +522,10 @@ export async function runCycleGeneration(
   // Order comes from `ai_providers.priority`; keys are decrypted here only.
   const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
   const providerRows = await r.listActiveAiProviders();
-  const chain = await resolveProviderChain(providerRows, env);
-  const engine = new AiEngine(env, chain);
+  // ⚠️ فقط providerهای TEXT (مِیگرشن ۰۰۱۱): مدل صوتی نباید در مسیر تولید
+  // محتوا امتحان شود و برعکس.
+  const chain = await resolveProviderChain(providerRows, env, 'TEXT');
+  const engine = new AiEngine(env, chain, 'TEXT');
 
   if (!engine.hasAnyProvider) {
     const reason =
@@ -710,7 +712,7 @@ async function buildGenerationInput(
  * هر روز)، این عدد را بالا ببرید. وگرنه outline قدیمی از کش خوانده می‌شود
  * و بهینه‌سازی جدید هرگز به کاربر نمی‌رسد.
  */
-const CACHE_CONTENT_VERSION = 2;
+const CACHE_CONTENT_VERSION = 3;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -915,15 +917,18 @@ export async function runLessonGeneration(
     target.part_1_data && Object.keys(target.part_1_data as object).length > 0;
   if (hasContent) return { ok: true };
 
+  // ⚠️ ستون DB هنوز `title_fa` naam دارد ولی معنایش «زبان رابط کاربر»
+  // است (یافتهٔ ۶ بازبینی). اینجا به `titleUi` نگاشت می‌شود تا با نام
+  // جدیدی که به AI می‌فرستیم یکی باشد.
   const outline: CycleOutline = {
     title: cycle.title,
-    titleFa: cycle.title_fa ?? cycle.title,
+    titleUi: cycle.title_fa ?? cycle.title,
     focusSummary: cycle.focus_summary ?? '',
     days: lessons
       .map((l) => ({
         dayNumber: l.day_number,
         title: l.title,
-        titleFa: l.title_fa ?? l.title,
+        titleUi: l.title_fa ?? l.title,
         kind: l.kind,
         // مرحلهٔ ۸ — اگر ستون objective در DB باشد همان را بگیر، وگرنه
         // از پروفایل ثابت روز استفاده کن (dayProfile خودش fallback دارد).
@@ -941,8 +946,10 @@ export async function runLessonGeneration(
 
   const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
   const providerRows = await r.listActiveAiProviders();
-  const chain = await resolveProviderChain(providerRows, env);
-  const engine = new AiEngine(env, chain);
+  // ⚠️ فقط providerهای TEXT (مِیگرشن ۰۰۱۱): مدل صوتی نباید در مسیر تولید
+  // محتوا امتحان شود و برعکس.
+  const chain = await resolveProviderChain(providerRows, env, 'TEXT');
+  const engine = new AiEngine(env, chain, 'TEXT');
   if (!engine.hasAnyProvider) return { ok: false, error: 'no AI provider available' };
 
   const variant = ((cycleNumber - 1) % 3) + 1;
@@ -995,14 +1002,46 @@ async function generateCycleInline(
  * `firstOnly` در حالت صف/ورک‌فلو معنای «فقط لایهٔ ساده در درخواست» را
  * ندارد — کل کار پس‌زمینه است.
  */
+/**
+ * زمان‌بندی تولید چرخه — سه مسیر به ترتیب اولویت:
+ *
+ *  ۱. **Workflow** (`CYCLE_WORKFLOW`): رایگان و پایدار. هر روز یک `step.do`
+ *     مستقل با retry خودش؛ اگر روز ۵ شکست بخورد فقط همان گام دوباره اجرا
+ *     می‌شود، نه کل چرخه. 🔴 اولویت اول از این روست.
+ *  ۲. **Queue** (`GENERATION_QUEUE`): ساده‌تر و سبک‌تر. وقتی Workflow
+ *     binding نشده باشد. retry با DLQ دارد ولی «هر روز» جدا نیست.
+ *  ۳. **inline**: فقط outline + روز ۱ در همان درخواست. آخرین راه‌حل —
+ *     بقیهٔ روزها بعداً با lazy generation یا کرون پر می‌شوند.
+ *
+ * ⚠️ روز ۱ همیشه در Workers ساخته می‌شود (نه Workflow) تا کاربر چند
+ * ثانیه‌ای درس داشته باشد؛ Workflow فقط روزهای ۲..۷ را اداره می‌کند.
+ */
 async function scheduleCycleGeneration(
   context: RequestContext,
   userId: string,
-  cycleNumber: number
+  cycleNumber: number,
+  opts: { withAudio?: boolean } = {}
 ): Promise<{ via: 'queue' | 'workflow' | 'inline' }> {
   const env = context.env;
 
-  // ۱) Queue
+  // ۱) Workflow — پایدارترین گزینه
+  if (env.CYCLE_WORKFLOW) {
+    try {
+      await env.CYCLE_WORKFLOW.create({
+        userId,
+        cycleNumber,
+        firstOnly: false,
+        withAudio: Boolean(opts.withAudio && env.MEDIA_BUCKET),
+      });
+      return { via: 'workflow' };
+    } catch (err) {
+      console.warn(
+        `[schedule] workflow create failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // ۲) Queue
   if (env.GENERATION_QUEUE) {
     try {
       await env.GENERATION_QUEUE.send({
@@ -1014,18 +1053,6 @@ async function scheduleCycleGeneration(
     } catch (err) {
       console.warn(
         `[schedule] queue send failed: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-
-  // ۲) Workflow
-  if (env.CYCLE_WORKFLOW) {
-    try {
-      await env.CYCLE_WORKFLOW.create({ userId, cycleNumber, full: true });
-      return { via: 'workflow' };
-    } catch (err) {
-      console.warn(
-        `[schedule] workflow create failed: ${err instanceof Error ? err.message : String(err)}`
       );
     }
   }

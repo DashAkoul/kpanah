@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { AiProviderKind } from '@kpanah/shared';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type {
@@ -36,9 +37,19 @@ import { haptic, showConfirm, showAlert } from '../../lib/telegram';
  *   • The "Test" button makes a real call, so a saved-but-broken key is caught
  *     before it matters.
  */
+/** سه دستهٔ provider — هر کدام لیست و زنجیرهٔ failover جدا دارند */
+type ProviderKind = 'TEXT' | 'TTS' | 'STT';
+
+const KINDS: { key: ProviderKind; icon: string }[] = [
+  { key: 'TEXT', icon: '💬' },
+  { key: 'TTS', icon: '🔊' },
+  { key: 'STT', icon: '🎙️' },
+];
+
 export function AiProvidersPanel() {
   const { t } = useTranslation();
   const [editing, setEditing] = useState<AiProvider | 'new' | null>(null);
+  const [kind, setKind] = useState<ProviderKind>('TEXT');
 
   const { data, isLoading, refetch } = useAiProviders();
   const queryClient = useQueryClient();
@@ -48,7 +59,10 @@ export function AiProvidersPanel() {
   const update = useUpdateAiProvider();
   const showToast = useUiStore((s) => s.showToast);
 
-  const providers = data?.providers ?? [];
+  const allProviders = data?.providers ?? [];
+  // ⚠️ فیلتر سمت کلاینت: زنجیرهٔ failover هر دسته جدا resolve می‌شود و
+  // «اولویت» فقط داخل همان دسته معنا دارد — نه در کل لیست.
+  const providers = allProviders.filter((p) => (p.kind ?? 'TEXT') === kind);
   const [testingId, setTestingId] = useState<string | null>(null);
 
   /**
@@ -162,9 +176,42 @@ export function AiProvidersPanel() {
         </div>
       )}
 
+      {/* ── دسته‌های provider ────────────────────────────────────────── */}
+      <div className="flex gap-1 rounded-pill border border-border bg-[var(--surface-sunken)] p-1">
+        {KINDS.map(({ key, icon }) => {
+          const count = allProviders.filter((p) => (p.kind ?? 'TEXT') === key).length;
+          const active = kind === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                haptic('select');
+                setKind(key);
+              }}
+              className={clsx(
+                'flex flex-1 items-center justify-center gap-1 rounded-pill py-1.5 text-[11px] font-medium transition',
+                active ? 'bg-accent text-accent-text shadow-sm' : 'text-text-hint'
+              )}
+            >
+              <span>{icon}</span>
+              <span>{t(`admin.ai.kind.${key}`)}</span>
+              {count > 0 && (
+                <span className={clsx('text-[9px]', active ? 'opacity-80' : 'text-text-muted')}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[10px] leading-relaxed text-text-hint">
+        {t(`admin.ai.kindHint.${kind}`)}
+      </p>
+
       {/* Provider list */}
       {providers.length === 0 ? (
-        <EmptyState icon="🤖" title={t('admin.ai.empty')} />
+        <EmptyState icon="🤖" title={t('admin.ai.emptyThisKind', { kind: t(`admin.ai.kind.${kind}`) })} />
       ) : (
         <div className="space-y-2">
           {providers.map((p, index) => (
@@ -400,6 +447,8 @@ function ProviderSheet({
 
   const isEdit = provider !== null;
 
+  // دستهٔ provider: هنگام ساخت از تبِ فعال ارث می‌برد، هنگام ویرایش از ردیف
+  const [kind, setKind] = useState<AiProviderKind>(provider?.kind ?? 'TEXT');
   const [preset, setPreset] = useState<AiVendorPreset>(() => {
     if (!provider) return 'gemini';
     const match = AI_VENDOR_PRESETS.find((p) => p.vendor === provider.vendor);
@@ -498,6 +547,7 @@ function ProviderSheet({
       const payload: CreateAiProviderInput = {
         label: label.trim(),
         protocol,
+        kind,
         vendor,
         model: model.trim(),
         baseUrl: baseUrl.trim() || null,
@@ -539,6 +589,32 @@ function ProviderSheet({
           <button type="button" onClick={onClose} className="text-text-hint">
             ✕
           </button>
+        </div>
+
+        {/* دستهٔ provider — سه گزینه */}
+        <div className="space-y-1.5">
+          <span className="text-xs font-medium text-text-hint">{t('admin.ai.kindLabel')}</span>
+          <div className="flex gap-1">
+            {(['TEXT', 'TTS', 'STT'] as AiProviderKind[]).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => {
+                  haptic('select');
+                  setKind(k);
+                }}
+                className={clsx(
+                  'flex-1 rounded-pill py-1.5 text-[11px] font-medium transition',
+                  kind === k ? 'bg-accent text-accent-text shadow-sm' : 'bg-[var(--surface-sunken)] text-text-hint'
+                )}
+              >
+                {KINDS.find((x) => x.key === k)?.icon} {t(`admin.ai.kind.${k}`)}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] leading-relaxed text-text-hint">
+            {t(`admin.ai.kindHint.${kind}`)}
+          </p>
         </div>
 
         {/* Vendor preset picker (new only) */}

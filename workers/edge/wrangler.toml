@@ -62,6 +62,18 @@ binding = "CYCLE_WORKFLOW"
 class_name = "CycleGenerationWorkflow"
 
 # ─────────────────────────────────────────────────────────────────────
+# R2 — ذخیره‌سازی فایل‌های صوتی (تلفظ واژه‌ها)
+# ⚠️ بدون این binding، route تولید صوت با ۵۰۳ «media storage is not
+# configured» جواب می‌دهد. ساخت باکس یک‌بار انجام می‌شود:
+#   npx wrangler r2 bucket create kpanah-media
+# پلن رایگان: ۱۰GB ذخیره‌سازی + ۱M نوشتن/۱۰M خواندن در ماه + egress رایگان.
+# ─────────────────────────────────────────────────────────────────────
+
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "kpanah-media"
+
+# ─────────────────────────────────────────────────────────────────────
 # Secrets (با `wrangler secret put NAME` تنظیم کنید — در فایل نگذارید)
 #
 #   TELEGRAM_BOT_TOKEN
@@ -89,6 +101,16 @@ ENABLE_PAYLOAD_ENCRYPTION = "false"
 MODULAR_GENERATION = "true"
 BACKGROUND_BUDGET_MS = "20000"
 RATE_LIMIT_PER_MINUTE = "60"
+
+# ── تبدیل متن به صوت (سرویس آنلاین، بدون AI) ───────────────────────
+# موتور پیش‌فرض رایگان است و برای تلفچ کوتاه کافی است. برای تعویض:
+#   TTS_BASE_URL = "https://your-tts-service.example/tts?text="
+TTS_PROVIDER = "online-tts"
+# ⚠️ لینک صوت باید **مطلق** باشد. فرانت روی دامنهٔ دیگری است
+# (app.infolange.kdns.fr)؛ اگر مسیر نسبی برگردد، مرورگر آن را نسبت به
+# origin فرانت حل می‌کند → ۴۰۴. (کلاینت هم fallback دارد، ولی این‌جا
+# درست ست می‌کنیم تا هر مصرف‌کننده‌ای لینک سالم بگیرد.)
+MEDIA_URL_BASE = "https://api.infolange.kdns.fr/kpanah56/8fjg7rfb/v1/media"
 RATE_LIMIT_PER_DAY = "2000"
 FREE_TRIAL_DAYS = "7"
 CYCLE_STALL_DAYS = "12"

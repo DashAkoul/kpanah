@@ -65,6 +65,33 @@ export interface Env {
   RATE_LIMIT_KV?: KVNamespace;
   CACHE_KV?: KVNamespace;
 
+  // R2 — فایل‌های رسانه (صوت تلف). اختیاری: اگر binding نباشد، صوت
+  // تولید نمی‌شود ولی بقیهٔ اپ کار می‌کند.
+  MEDIA_BUCKET?: {
+    put(
+      key: string,
+      value: ArrayBuffer | Uint8Array | string,
+      options?: {
+        httpMetadata?: { contentType?: string; cacheControl?: string };
+        customMetadata?: Record<string, string>;
+      }
+    ): Promise<unknown>;
+    get(key: string): Promise<{
+      arrayBuffer(): Promise<ArrayBuffer>;
+      httpMetadata?: { contentType?: string; cacheControl?: string };
+    } | null>;
+    head(key: string): Promise<{ size: number } | null>;
+  };
+
+  /** آدرس پایهٔ سرو کردن فایل‌ها (route خود ما) */
+  MEDIA_URL_BASE?: string;
+
+  // TTS — سرویس آنلاین تبدیل متن به صوت (بدون AI)
+  /** آدرس سرویس؛ پیش‌فرض Google Translate TTS */
+  TTS_BASE_URL?: string;
+  /** فقط برای لاگ: نام موتور صوتی */
+  TTS_PROVIDER?: string;
+
   // Queues (تولید پس‌زمینه) — اختیاری؛ اگر binding نباشد fallback اجرا می‌شود
   GENERATION_QUEUE?: {
     send(message: unknown): Promise<void>;

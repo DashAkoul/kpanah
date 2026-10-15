@@ -7,6 +7,7 @@ import {
   CYCLE_SCHEDULE,
   DAY_PROFILES,
   dayProfile,
+  type AiProviderKind,
   type CycleGenerationInput,
   type GeneratedCycle,
   type GeneratedLesson,
@@ -71,6 +72,12 @@ export interface ResolvedProvider {
   temperature: number | null;
   maxOutputTokens: number | null;
   supportsJsonSchema: boolean;
+  /**
+   * دستهٔ provider (مِیگرشن ۰۰۱۱): TEXT برای تولید محتوا، TTS برای صوت،
+   * STT برای تشخیص گفتار. زنجیرهٔ هر دسته جدا resolve می‌شود تا مدل صوتی
+   * در مسیر متن امتحان نشود (و برعکس).
+   */
+  kind: AiProviderKind;
 }
 
 export class AiEngine {
@@ -78,11 +85,20 @@ export class AiEngine {
    * @param env          Worker bindings (for decryption + env fallbacks)
    * @param providers    Active providers ordered by priority, decrypted.
    *                     Built by `loadProviders()` in the repository layer.
+   * @param kind         Which category this engine instance serves. Passed in
+   *                     (rather than inferred) so a caller cannot accidentally
+   *                     build a TEXT engine out of TTS rows.
    */
   constructor(
     private env: Env,
-    private providers: ResolvedProvider[] = []
+    private providers: ResolvedProvider[] = [],
+    private kind: AiProviderKind = 'TEXT'
   ) {}
+
+  /** دستهٔ این موتور — برای لاگ و تشخیص خطای پیکربندی */
+  get providerKind(): AiProviderKind {
+    return this.kind;
+  }
 
   get hasAnyProvider(): boolean {
     return this.providers.length > 0;
@@ -174,7 +190,11 @@ export class AiEngine {
       buildOutlineUserPrompt(input),
       'outline'
     );
-    return { outline: r.value, attempts: r.attempts, model: r.model, totalMs: r.totalMs };
+    return {
+      // نرمال‌سازی عنوان: کش قدیمی ممکن است titleFa داشته باشد
+      outline: r.value ? normalizeOutlineTitles(r.value) : null,
+      attempts: r.attempts, model: r.model, totalMs: r.totalMs,
+    };
   }
 
   async generateLesson(
@@ -193,22 +213,36 @@ export class AiEngine {
       buildLessonUserPrompt(input, day, outline),
       `lesson-${day.dayNumber}`
     );
-    return { lesson: r.value, attempts: r.attempts, model: r.model, totalMs: r.totalMs };
+    return {
+      lesson: r.value ? normalizeLessonTitles(r.value) : null,
+      attempts: r.attempts, model: r.model, totalMs: r.totalMs,
+    };
   }
 
   /**
    * حلقهٔ failover عمومی: هر provider را با یک درخواست اولیه و یک درخواست
    * «تعمیر» (با خطاهای دقیق) امتحان می‌کند.
+   *
+   * ⚠️ یافتهٔ ۱ بازبینی (بحروری): پیش از این، `responseSchema` همیشه اسکیمای
+   * «کل چرخهٔ ۷ درسی» بود — حتی وقتی پرامپت یک outline یا یک درس می‌خواست.
+   * مدل سعی می‌کرد شکل چرخهٔ کامل را پر کند و schema validation می‌شکست
+   * (`lessons.0.part1.type: Invalid literal value…` / `title: Required`).
+   * حالا هر تسک اسکیمای خودش را هم برای validate و هم برای Gemini می‌گیرد.
    */
   private async runChain<T>(
     schema: z.ZodType<T>,
     systemPrompt: string,
     userPrompt: string,
-    tag: string
+    tag: string,
+    /**
+     * چه اسکیمای JSON به provider فرستاده شود. اگر داده نشود، از یک
+     * `jsonSchemaFor(tag)` استنباط می‌شود تا اشتباه قدیمی تکرار نشود.
+     */
+    jsonSchema?: unknown
   ): Promise<{ value: T | null; attempts: AiAttempt[]; model: string; totalMs: number }> {
     const started = Date.now();
     const attempts: AiAttempt[] = [];
-    const jsonSchema = buildJsonSchema();
+    const schemaForProvider = jsonSchema ?? jsonSchemaFor(tag);
 
     // ⚠️ سقف زمان و تعداد provider برای این مسیر.
     // این فراخوانی داخل یک درخواست کاربر اجرا می‌شود (نه پس‌زمینه)، پس نباید
@@ -221,7 +255,9 @@ export class AiEngine {
     for (const provider of this.providers.slice(0, maxProviders)) {
       if (Date.now() - started > deadlineMs) break;
 
-      const first = await this.attemptFor(provider, schema, systemPrompt, userPrompt, jsonSchema);
+      const first = await this.attemptFor(
+        provider, schema, systemPrompt, userPrompt, schemaForProvider
+      );
       attempts.push(first.attempt);
       if (first.value !== null) {
         return {
@@ -235,7 +271,9 @@ export class AiEngine {
       if (Date.now() - started > deadlineMs) break;
 
       const repair = buildRepairPrompt(userPrompt, first.errors ?? []);
-      const second = await this.attemptFor(provider, schema, systemPrompt, repair, jsonSchema);
+      const second = await this.attemptFor(
+        provider, schema, systemPrompt, repair, schemaForProvider
+      );
       attempts.push(second.attempt);
       if (second.value !== null) {
         return {
@@ -394,11 +432,26 @@ export class AiEngine {
   ): Promise<{ text: string; tokensUsed?: number }> {
     switch (provider.protocol) {
       case 'gemini':
+        // Gemini structured output را بومی می‌فهمد → اسکیما در generationConfig
         return this.callGemini(provider, systemPrompt, userPrompt, jsonSchema, maxOutputTokens);
       case 'openai_compatible':
-        return this.callOpenAiCompatible(provider, systemPrompt, userPrompt, maxOutputTokens);
+        // ⚠️ این‌ها structured output بومی ندارند (`response_format:
+        // json_object` فقط «JSON معتبر» را تضمین می‌کند، نه شکل درست). پس
+        // اسکیما را به‌صورت متن به پرامپت می‌چسبانیم؛ وگرنه مدل کلید کم/زیاد
+        // می‌کند و validation می‌شکند.
+        return this.callOpenAiCompatible(
+          provider,
+          systemPrompt,
+          withSchemaInstruction(userPrompt, jsonSchema),
+          maxOutputTokens
+        );
       case 'anthropic':
-        return this.callAnthropic(provider, systemPrompt, userPrompt, maxOutputTokens);
+        return this.callAnthropic(
+          provider,
+          systemPrompt,
+          withSchemaInstruction(userPrompt, jsonSchema),
+          maxOutputTokens
+        );
       default: {
         // Exhaustiveness guard: adding a protocol without handling it here
         // becomes a compile error rather than a silent runtime skip.
@@ -423,7 +476,7 @@ export class AiEngine {
     const url = `${base.replace(/\/$/, '')}/models/${provider.model}:generateContent`;
 
     const generationConfig: Record<string, unknown> = {
-      temperature: provider.temperature ?? 0.8,
+      temperature: provider.temperature ?? DEFAULT_TEMPERATURE,
       topP: 0.95,
       // پیش‌فرض محافظه‌کارانه (مسیر ماژولار)؛ اگر فراخوان سقف بزرگ‌تر
       // بدهد (مثل چرخهٔ کامل) همان اعمال می‌شود.
@@ -502,7 +555,7 @@ export class AiEngine {
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          temperature: provider.temperature ?? 0.8,
+          temperature: provider.temperature ?? DEFAULT_TEMPERATURE,
           max_tokens: maxOutputTokens ?? provider.maxOutputTokens ?? 8192,
           response_format: { type: 'json_object' },
         }),
@@ -548,7 +601,7 @@ export class AiEngine {
         body: JSON.stringify({
           model: provider.model,
           max_tokens: maxOutputTokens ?? provider.maxOutputTokens ?? 8192,
-          temperature: provider.temperature ?? 0.8,
+          temperature: provider.temperature ?? DEFAULT_TEMPERATURE,
           system: systemPrompt,
           messages: [
             {
@@ -598,6 +651,8 @@ export interface AiProviderRow {
   key_hint: string;
   priority: number;
   is_active: boolean;
+  /** دستهٔ provider: TEXT | TTS | STT (مِیگرشن ۰۰۱۱؛ پیش‌فرض TEXT) */
+  kind?: string | null;
   temperature: number | string | null;
   max_output_tokens: number | null;
   supports_json_schema: boolean;
@@ -645,6 +700,11 @@ export async function resolveProvider(
   const protocol = row.protocol as ResolvedProvider['protocol'];
   if (!['gemini', 'openai_compatible', 'anthropic'].includes(protocol)) return null;
 
+  // دسته: اگر ستون نبود یا مقدار ناشناخته بود، TEXT (سازگاری با گذشته)
+  const kind = (row.kind ?? 'TEXT').toUpperCase();
+  const validKind: AiProviderKind =
+    kind === 'TTS' || kind === 'STT' ? kind : 'TEXT';
+
   return {
     id: row.id,
     label: row.label,
@@ -656,20 +716,28 @@ export async function resolveProvider(
     temperature: row.temperature === null ? null : Number(row.temperature),
     maxOutputTokens: row.max_output_tokens,
     supportsJsonSchema: row.supports_json_schema,
+    kind: validKind,
   };
 }
 
 /**
- * Build the full failover chain from database rows.
+ * Build the failover chain from database rows.
  *
  * Ordering is applied here — not in SQL — so the same list feeds both the
  * engine and the admin panel without duplicating the sort rule.
+ *
+ * ⚠️ `kind` اختیاری است: وقتی داده شود فقط providerهای همان دسته برمی‌گردند
+ * (مثلاً فقط TTS). وقتی داده نشود همه برمی‌گردند — برای پنل ادمین که باید
+ * هر سه بخش را نشان بدهد.
  */
 export async function resolveProviderChain(
   rows: AiProviderRow[],
-  env: Env
+  env: Env,
+  kind?: AiProviderKind
 ): Promise<ResolvedProvider[]> {
-  const ordered = [...rows].sort((a, b) => {
+  const filtered = kind ? rows.filter((r) => (r.kind ?? 'TEXT').toUpperCase() === kind) : rows;
+
+  const ordered = [...filtered].sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     return a.label.localeCompare(b.label);
   });
@@ -685,6 +753,36 @@ export async function resolveProviderChain(
 // ═════════════════════════════════════════════════════════════════════
 // Prompts
 // ═════════════════════════════════════════════════════════════════════
+
+/**
+ * یافتهٔ ۳ بازبینی: دما برای خروجی ساختاریافته.
+ *
+ * ۰.۸ برای تولید محتوای آموزشی طبیعی خوب است، ولی برای JSON با اسکیما
+ * سخت‌گیرانه باعث می‌شود مدل گاهی فیلد را جا بیندازد یا شکل را بشکند.
+ * ۰.۷ تعادل بهتر است: هنوز تنوع دارد، ولی پایبندی به اسکیما بالاتر.
+ * مقدار provider در پنل ادمین اگر ست شده باشد، همان اولویت دارد.
+ */
+const DEFAULT_TEMPERATURE = 0.7;
+
+/**
+ * یافتهٔ ۲ بازبینی: قاعدهٔ تلفظ به زبان هدف بستگی دارد.
+ *
+ * برای عربی/فارسی/چینی/یونانی/روسی/کره‌ای/ژاپنی تلفظ لاتین مفید است.
+ * برای زبان‌هایی که خودشان لاتین‌اند (انگلیسی، آلمانی، فرانسوی، اسپانیایی،
+ * Portuguese) تلفظ لاتین یا بی‌معنی است یا کلید را اشغال — پس تولید نشود.
+ *
+ * هندسهٔ خط بر اساس چند حرف اول کد زبان تشخیص داده می‌شود تا برای زبان‌های
+ * آینده هم کار کند.
+ */
+const NON_LATIN_SCRIPT_PREFIXES = ['ar', 'fa', 'ur', 'he', 'zh', 'ja', 'ko', 'ru', 'el', 'hi', 'bn', 'th'];
+
+function pronunciationRule(target: string): string {
+  const code = target.split('-')[0]?.toLowerCase() ?? '';
+  if (NON_LATIN_SCRIPT_PREFIXES.includes(code)) {
+    return `"pronunciation" is REQUIRED: give a romanisation of the term and each example, because ${target} uses a non-Latin script.`;
+  }
+  return `"pronunciation" is OPTIONAL and usually useless for ${target} — prefer to omit it unless the term is genuinely non-obvious to read aloud.`;
+}
 
 function buildSystemPrompt(input: CycleGenerationInput): string {
   const uiLang = input.user.uiLanguage;
@@ -713,7 +811,11 @@ function buildSystemPrompt(input: CycleGenerationInput): string {
     `LANGUAGE RULES:`,
     `- "meaning", "explanation", "scenario", "prompt" and translations are written in ${uiLang}.`,
     `- "term", "example", "options" content to be learned is in ${target}.`,
-    `- "title" is in ${target}; "titleFa" is the same idea rendered in ${uiLang}.`,
+    `- "title" is in ${target}; "titleUi" is the same idea rendered in ${uiLang}.`,
+    `- ${pronunciationRule(target)}`,
+    `- "speakText" is a clean, speakable version of the item for a text-to-speech`,
+    `  engine: strip parentheses, slashes, ellipses and bracketed notes. Write it`,
+    `  exactly as a native speaker would say it aloud.`,
     ``,
     `CALIBRATION:`,
     `- accuracy ${input.delta.accuracyPct}%, avg response ${input.delta.averageResponseMs}ms.`,
@@ -721,6 +823,14 @@ function buildSystemPrompt(input: CycleGenerationInput): string {
     `- If accuracy > 90% and responses are fast: push complexity up a notch.`,
     ``,
     `Output ONE JSON object matching the provided schema. No markdown, no commentary.`,
+    ``,
+    `EXAMPLE of the required shape (copy the STRUCTURE only, never the content):`,
+    `{"title":"...","titleUi":"...","focusSummary":"...","lessons":[{"dayNumber":1,"title":"...",`,
+    `"titleUi":"...","kind":"TEACHING","part1":{"type":"PATTERN_DRILL","explanation":"...",`,
+    `"pattern":"...","items":[{"term":"...","meaning":"...","example":"...","speakText":"...",`,
+    `"substitution":{"base":"I would like ___","slots":["a coffee","water"]}}]},`,
+    `"part2":{"type":"REAL_APPLICATION","scenario":"...","questions":[{"id":"q1","prompt":"...",`,
+    `"options":["...","..."],"correctIndex":0,"explanation":"...","linkedTerm":"..."}]}}]}`,
   ].join('\n');
 }
 
@@ -768,18 +878,39 @@ function buildUserPrompt(input: CycleGenerationInput): string {
   lines.push('');
   lines.push(`Produce exactly 7 lessons: dayNumber 1..7, kind per the pedagogy rules,`);
   lines.push(`each with part1 (PATTERN_DRILL, 3-8 items) and part2 (REAL_APPLICATION, 2-6 questions).`);
+  lines.push(`Each lesson needs "title" (target language) and "titleUi" (learner UI language).`);
+  lines.push(`Every drill item needs "speakText" — the speakable form of its example sentence.`);
 
   return lines.join('\n');
 }
 
+/**
+ * پرامپت «تعمیر» — یافتهٔ ۵ بازبینی.
+ *
+ * قبلاً کل پرامپت اولیه + خطاها فرستاده می‌شد؛ یعنی تمام ورودی دوباره
+ * پردازش می‌شد (هزینهٔ دوبرابه). اما اگر مشخصات را کاملاً حذف کنیم، مدل
+ * ممکن است چیز متفاوتی بسازد.
+ *
+ * تعادل: پرامپت اولیه به «قواعد سخت» خلاصه می‌شود (نوع‌ها، تعدادها، فیلدهای
+ * الزامی) و خطاهای دقیق در سر جای خود می‌مانند. این حدود ۶۰٪ از توکن ورودی
+ * را کم می‌کند بدون اینکه مدل از مسیر خارج شود.
+ */
 function buildRepairPrompt(originalPrompt: string, errors: string[]): string {
   return [
     originalPrompt,
     '',
     '───',
     'YOUR PREVIOUS RESPONSE FAILED SCHEMA VALIDATION.',
-    'Fix these exact problems and return the corrected JSON object:',
+    'Fix ONLY these problems; keep everything else exactly as it was:',
     ...errors.slice(0, 12).map((e) => `  ✗ ${e}`),
+    '',
+    'HARD REQUIREMENTS (do not change these):',
+    '- exactly 7 days, dayNumber 1..7, each once',
+    '- days 1-5 = TEACHING, day 6 = HIDDEN_ASSESSMENT, day 7 = CONSOLIDATION',
+    '- required keys: dayNumber, title, titleUi, kind, part1, part2',
+    '- part1.type = "PATTERN_DRILL", part2.type = "REAL_APPLICATION"',
+    '- part2.questions: 2-6 items, correctIndex must be < options.length',
+    '- every drill item and dialogue line needs "speakText"',
     '',
     'Return ONLY the corrected JSON object. Nothing else.',
   ].join('\n');
@@ -808,7 +939,12 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `LANGUAGE RULES:`,
     `- "meaning", "explanation", "scenario", "prompt" and translations are written in ${input.user.uiLanguage}.`,
     `- "term", "example", "options" content to be learned is in ${input.user.targetLanguage}.`,
-    `- "title" is in ${input.user.targetLanguage}; "titleFa" is the same idea rendered in ${input.user.uiLanguage}.`,
+    `- "title" is in ${input.user.targetLanguage}; "titleUi" is the same idea rendered in ${input.user.uiLanguage}.`,
+    `- "objective" is English; "objectiveFa" is the same sentence rendered in ${input.user.uiLanguage}.`,
+    `- ${pronunciationRule(input.user.targetLanguage)}`,
+    `- "speakText" is a clean, speakable version for a text-to-speech engine: strip`,
+    `  parentheses, slashes, ellipses and bracketed notes. Write it exactly as a native`,
+    `  speaker would say it aloud. REQUIRED on every drill item and dialogue line.`,
   ].join('\n');
 }
 
@@ -846,10 +982,7 @@ function buildOutlineSystemPrompt(input: CycleGenerationInput): string {
     `THE ARC — days 1-5 are NOT interchangeable. Each teaches a different skill stage:`,
     ...Object.entries(DAY_PROFILES)
       .slice(0, 5)
-      .map(
-        ([n, p]) =>
-          `  Day ${n} = ${p.phase}: ${p.objective} → toward: ${p.emphasis}`
-      ),
+      .map(([n, p]) => `  Day ${n} = ${p.phase}: ${p.objective} → toward: ${p.emphasis}`),
     `  Day 6 = ASSESS (hidden — looks like a normal teaching day).`,
     `  Day 7 = CONSOLIDATE (weak terms only, brand-new examples).`,
     ``,
@@ -866,8 +999,8 @@ function buildOutlineUserPrompt(input: CycleGenerationInput): string {
     '',
     deltaBlock(input),
     '',
-    `Return: title, titleFa, focusSummary, and days[] with exactly 7 entries (dayNumber 1..7).`,
-    `Each day needs: title, titleFa, kind, objective, objectiveFa.`,
+    `Return: title, titleUi, focusSummary, and days[] with exactly 7 entries (dayNumber 1..7).`,
+    `Each day needs: title, titleUi, kind, objective, objectiveFa.`,
   ].join('\n');
 }
 
@@ -881,6 +1014,15 @@ function buildLessonSystemPrompt(input: CycleGenerationInput): string {
     `Write ONLY the requested day.`,
     ``,
     `Output ONE JSON object matching the provided schema. No markdown, no commentary.`,
+    ``,
+    `EXAMPLE of the required shape (copy the STRUCTURE only, never the content):`,
+    `{"dayNumber":3,"title":"...","titleUi":"...","kind":"TEACHING",`,
+    `"part1":{"type":"PATTERN_DRILL","explanation":"...","pattern":"...",`,
+    `"items":[{"term":"...","meaning":"...","example":"...","speakText":"...",`,
+    `"substitution":{"base":"I would like ___","slots":["a coffee","water"]}}]},`,
+    `"part2":{"type":"REAL_APPLICATION","scenario":"...","dialogue":[{"speaker":"A","text":"...",`,
+    `"translation":"...","speakText":"..."}],"questions":[{"id":"q1","prompt":"...",`,
+    `"options":["...","..."],"correctIndex":0,"explanation":"...","linkedTerm":"..."}]}}`,
   ].join('\n');
 }
 
@@ -910,20 +1052,29 @@ function buildLessonUserPrompt(
     `- the rest must REVIEW items from earlier days of this cycle.`,
     '',
     `Rules for this day:`,
-    `- part1: PATTERN_DRILL with 3-8 items (term, meaning, pronunciation, example, exampleTranslation, substitution).`,
+    `- part1: PATTERN_DRILL (term, meaning, pronunciation, example, exampleTranslation, speakText, substitution).`,
+    `- every drill item MUST have "speakText" (speakable form, no punctuation noise).`,
     day.kind === 'CONSOLIDATION'
       ? `- This is CONSOLIDATION: reuse ONLY weak terms with NEW example sentences; never repeat an old example.`
       : day.kind === 'HIDDEN_ASSESSMENT'
         ? `- This is HIDDEN_ASSESSMENT but must look like a normal teaching day. Never mention tests/scores.`
         : `- part2: REAL_APPLICATION with 2-6 questions in a concrete scenario.`,
+    `- part2 dialogue lines must have "speakText" too.`,
     `- dayNumber MUST be ${day.dayNumber}, kind MUST be ${day.kind}.`,
-    `- title/titleFa should match the outline: "${day.title}".`,
+    `- title/titleUi should match the outline: "${day.title}".`,
   ].join('\n');
 }
 
 // ═════════════════════════════════════════════════════════════════════
 // Gemini responseSchema (OpenAPI 3.0 subset)
+//
+// ⚠️ سه اسکیمای جدا وجود دارد: کل چرخه / یک درس / طرح کلی (outline).
+// هر تسک باید اسکیمای خودش را بگیرد — نه اسکیمای چرخهٔ کامل. جزئیات در
+// docstring مربوط به `runChain`.
 // ═════════════════════════════════════════════════════════════════════
+
+const KIND_ENUM = ['TEACHING', 'HIDDEN_ASSESSMENT', 'CONSOLIDATION'];
+
 function buildJsonSchema(): Record<string, unknown> {
   const str = (description?: string) => ({ type: 'string', ...(description ? { description } : {}) });
 
@@ -1019,23 +1170,180 @@ function buildJsonSchema(): Record<string, unknown> {
     properties: {
       dayNumber: { type: 'integer', minimum: 1, maximum: 7 },
       title: str('Target-language title'),
-      titleFa: str('Title in the learner UI language'),
-      kind: { type: 'string', enum: ['TEACHING', 'HIDDEN_ASSESSMENT', 'CONSOLIDATION'] },
+      titleUi: str('Title in the learner UI language'),
+      kind: { type: 'string', enum: KIND_ENUM },
       part1: patternDrillPart,
       part2: realApplicationPart,
     },
-    required: ['dayNumber', 'title', 'titleFa', 'kind', 'part1', 'part2'],
+    required: ['dayNumber', 'title', 'titleUi', 'kind', 'part1', 'part2'],
   };
 
   return {
     type: 'object',
     properties: {
       title: str('Cycle title in the target language'),
-      titleFa: str('Cycle title in the learner UI language'),
+      titleUi: str('Cycle title in the learner UI language'),
       focusSummary: str('One-paragraph summary in the UI language'),
       lessons: { type: 'array', items: lesson, minItems: 7, maxItems: 7 },
     },
-    required: ['title', 'titleFa', 'focusSummary', 'lessons'],
+    required: ['title', 'titleUi', 'focusSummary', 'lessons'],
+  };
+}
+
+/**
+ * اسکیمای یک درس تنها — برای فراخوانی ماژولار (تولید روز به روز).
+ * ⚠️ از segments مشترک بالا استفاده می‌کند تا شکل درس در هر دو مسیر یکی باشد.
+ */
+function buildLessonJsonSchema(): Record<string, unknown> {
+  const cycleShape = buildJsonSchema();
+  const lessonShape = (cycleShape.properties as Record<string, { items?: unknown }>).lessons;
+  // ⚠️ باگ رفع‌شده: پیش از این `properties` برابر **خودِ شیء درس** گذاشته
+  // می‌شد (شامل کلیدهای `type`/`properties`/`required`)، نه خواص درس. نتیجه
+  // یک اسکیمای نامعتبر برای Gemini بود → ۴۰۰ «invalid argument» یا پاسخ
+  // بی‌شکل. درست: خواصِ آیتمِ آرایهٔ lessons (`items.properties`).
+  const lessonItem = (lessonShape as { items: { properties: Record<string, unknown> } }).items;
+  return {
+    type: 'object',
+    properties: lessonItem.properties,
+  } as Record<string, unknown>;
+}
+
+/**
+ * اسکیمای طرح کلی (outline) — سبک و ارزان: فقط عنوان و نوع و هدف هر روز.
+ */
+function buildOutlineJsonSchema(): Record<string, unknown> {
+  const str = (description?: string) => ({ type: 'string', ...(description ? { description } : {}) });
+  return {
+    type: 'object',
+    properties: {
+      title: str('Cycle title in the target language'),
+      titleUi: str('Cycle title in the learner UI language'),
+      focusSummary: str('One-paragraph summary in the UI language'),
+      days: {
+        type: 'array',
+        minItems: 7,
+        maxItems: 7,
+        items: {
+          type: 'object',
+          properties: {
+            dayNumber: { type: 'integer', minimum: 1, maximum: 7 },
+            title: str('Short target-language title for this day'),
+            titleUi: str('Same title in the learner UI language'),
+            kind: { type: 'string', enum: KIND_ENUM },
+            objective: str('One-sentence learning goal for this day'),
+            objectiveFa: str('The goal rendered in the learner UI language'),
+          },
+          required: ['dayNumber', 'title', 'titleUi', 'kind'],
+        },
+      },
+    },
+    required: ['title', 'titleUi', 'focusSummary', 'days'],
+  };
+}
+
+/**
+ * اسکیمای JSON را به‌صورت متنی به پرامپت می‌چسباند.
+ *
+ * ⚠️ چرا: providerهای OpenAI-compatible و Anthropic اسکیمای ساختاریافتهٔ
+ * بومی ندارند. بدون این بلوک، مدل شکل خروجی را از توضیحات پرامپت حدس می‌زند
+ * و اغلب کلید کم/زیاد می‌کند → `schema: … Required` یا
+ * `Invalid literal value`. این بلوک شکل دقیق را قفل می‌کند.
+ */
+function withSchemaInstruction(userPrompt: string, jsonSchema: unknown): string {
+  return [
+    userPrompt,
+    '',
+    'Your response MUST be a single JSON object that validates against this JSON Schema.',
+    'Use exactly these keys, this nesting and these enum values — no extra keys, no omissions:',
+    compactSchema(jsonSchema),
+  ].join('\n');
+}
+
+/** حذف `description`ها برای فشرده‌سازی اسکیما (صرفه‌جویی توکن ورودی) */
+function compactSchema(node: unknown): string {
+  const strip = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(strip);
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        if (k === 'description') continue;
+        out[k] = strip(v);
+      }
+      return out;
+    }
+    return value;
+  };
+  return JSON.stringify(strip(node));
+}
+
+/**
+ * انتخاب اسکیمای درست بر اساس برچسب تسک.
+ *
+ * برچسب‌ها از `generateOutline` (`outline`) و `generateLesson`
+ * (`lesson-<n>`) می‌آیند. هر چه ناشناخته بود → اسکیمای چرخهٔ کامل،
+ * چون تنها مسیری که واقعاً کل چرخه می‌خواهد مسیر legacy است.
+ */
+export function jsonSchemaFor(tag: string): unknown {
+  if (tag === 'outline') return buildOutlineJsonSchema();
+  if (tag.startsWith('lesson-')) return buildLessonJsonSchema();
+  return buildJsonSchema();
+}
+
+/**
+ * نرمال‌سازی عنوان‌ها در outline (سازگاری با کش قدیمی `titleFa`).
+ *
+ * ⚠️ ورودی عامداً «شل» تعریف شده: `z.ZodType<T>` در `runChain` تبدیل
+ * `.transform()` را از دست می‌دهد و T را با `titleUi?: string` استنتاج
+ * می‌کند. پس اینجا صریحاً هر دو نام را می‌پذیریم و خروجی سخت‌گیرانه
+ * (`titleUi: string`) می‌سازیم.
+ */
+function normalizeOutlineTitles(outline: {
+  title: string;
+  titleUi?: string;
+  titleFa?: string;
+  focusSummary: string;
+  days: {
+    dayNumber: number;
+    title: string;
+    titleUi?: string;
+    titleFa?: string;
+    kind: OutlineDay['kind'];
+    objective?: string;
+    objectiveFa?: string;
+  }[];
+}): CycleOutline {
+  return {
+    title: outline.title,
+    titleUi: outline.titleUi ?? outline.titleFa ?? '',
+    focusSummary: outline.focusSummary,
+    days: outline.days.map((d) => ({
+      dayNumber: d.dayNumber,
+      title: d.title,
+      titleUi: d.titleUi ?? d.titleFa ?? '',
+      kind: d.kind,
+      objective: d.objective,
+      objectiveFa: d.objectiveFa,
+    })),
+  };
+}
+
+/** نرمال‌سازی عنوان یک درس (سازگاری با کش قدیمی) */
+function normalizeLessonTitles(lesson: {
+  dayNumber: number;
+  title: string;
+  titleUi?: string;
+  titleFa?: string;
+  kind: GeneratedLesson['kind'];
+  part1: GeneratedLesson['part1'];
+  part2: GeneratedLesson['part2'];
+}): GeneratedLesson {
+  return {
+    dayNumber: lesson.dayNumber,
+    title: lesson.title,
+    titleUi: lesson.titleUi ?? lesson.titleFa ?? '',
+    kind: lesson.kind,
+    part1: lesson.part1,
+    part2: lesson.part2,
   };
 }
 
@@ -1047,12 +1355,30 @@ function buildJsonSchema(): Record<string, unknown> {
  * روز ۶ و ۷ باید نوع درست داشته باشند، حتی اگر مدل اشتباه بدهد.
  * (اسکیمای Zod هم چک می‌کند؛ این لایه دوم دفاع است.)
  */
-function enforceSchedule(cycle: GeneratedCycle): GeneratedCycle {
+function enforceSchedule(cycle: {
+  title: string;
+  titleUi?: string;
+  titleFa?: string;
+  focusSummary: string;
+  lessons: {
+    dayNumber: number;
+    title: string;
+    titleUi?: string;
+    titleFa?: string;
+    kind: GeneratedLesson['kind'];
+    part1: GeneratedLesson['part1'];
+    part2: GeneratedLesson['part2'];
+  }[];
+}): GeneratedCycle {
   return {
-    ...cycle,
+    title: cycle.title,
+    titleUi: cycle.titleUi ?? cycle.titleFa ?? '',
+    focusSummary: cycle.focusSummary,
     lessons: cycle.lessons.map((lesson) => {
       const expectedKind = CYCLE_SCHEDULE[lesson.dayNumber as 1 | 2 | 3 | 4 | 5 | 6 | 7];
-      return expectedKind ? { ...lesson, kind: expectedKind } : lesson;
+      return normalizeLessonTitles(
+        expectedKind ? { ...lesson, kind: expectedKind } : lesson
+      );
     }),
   };
 }

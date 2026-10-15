@@ -49,6 +49,13 @@ export interface AiAttempt {
   model: string;
   ok: boolean;
   ms: number;
+  /**
+   * ⚠️ `initial` = فراخوانی اول، `repair` = تلاش دوباره پس از خطای
+   * اعتبارسنجی. پیش از این همهٔ ردیف‌های `ai_attempt_log` با `phase:
+   * 'initial'` ثبت می‌شدند و تحلیل «چند درصد خطاها با repair حل شد»
+   * غیرممکن بود.
+   */
+  phase: 'initial' | 'repair';
   error?: string;
   tokensUsed?: number;
 }
@@ -189,7 +196,7 @@ export class AiEngine {
       if (Date.now() - started > deadlineMs) break;
 
       const first = await this.attemptFor(
-        provider, schema, systemPrompt, userPrompt, schemaForProvider
+        provider, schema, systemPrompt, userPrompt, schemaForProvider, 'initial'
       );
       attempts.push(first.attempt);
       if (first.value !== null) {
@@ -205,7 +212,7 @@ export class AiEngine {
 
       const repair = buildRepairPrompt(userPrompt, first.errors ?? []);
       const second = await this.attemptFor(
-        provider, schema, systemPrompt, repair, schemaForProvider
+        provider, schema, systemPrompt, repair, schemaForProvider, 'repair'
       );
       attempts.push(second.attempt);
       if (second.value !== null) {
@@ -227,10 +234,16 @@ export class AiEngine {
     schema: z.ZodType<T>,
     systemPrompt: string,
     userPrompt: string,
-    jsonSchema: unknown
+    jsonSchema: unknown,
+    phase: 'initial' | 'repair'
   ): Promise<{ value: T | null; errors?: string[]; attempt: AiAttempt }> {
     const t0 = Date.now();
-    const base = { provider: provider.label, providerId: provider.id, model: provider.model };
+    const base = {
+      provider: provider.label,
+      providerId: provider.id,
+      model: provider.model,
+      phase,
+    };
 
     try {
       const { text, tokensUsed } = await this.callProvider(

@@ -685,20 +685,24 @@ export class ContentRepository {
 
   async getTelemetryForCycle(cycleId: string): Promise<{
     event_type: string;
+    lesson_id: string | null;
     item_id: string | null;
     is_correct: boolean | null;
     response_ms: number | null;
     pause_ms: number | null;
   }[]> {
+    // ⚠️ `lesson_id` لازم است: بدون آن نمی‌توان پاسخ‌های یک روز خاص (مثلاً
+    // آزمون پنهان روز ۶) را از کل چرخه جدا کرد.
     const rows = await this.db.select<{
       event_type: string;
+      lesson_id: string | null;
       item_id: string | null;
       is_correct: boolean | null;
       response_ms: number | null;
       pause_ms: number | null;
     }>('telemetry_events', {
       cycle_id: `eq.${cycleId}`,
-      select: 'event_type,item_id,is_correct,response_ms,pause_ms',
+      select: 'event_type,lesson_id,item_id,is_correct,response_ms,pause_ms',
       limit: '5000',
     });
     return (rows as never[]) ?? [];

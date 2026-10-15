@@ -582,6 +582,7 @@ async function recordAttempts(
     model: string;
     ok: boolean;
     ms: number;
+    phase: 'initial' | 'repair';
     error?: string;
     tokensUsed?: number;
   }[]
@@ -603,7 +604,7 @@ async function recordAttempts(
         providerLabel: a.provider,
         model: a.model,
         attemptNo: i + 1,
-        phase: 'initial',
+        phase: a.phase,
         ok: a.ok,
         latencyMs: a.ms,
         error: a.error,
@@ -632,10 +633,15 @@ async function buildGenerationInput(
   const telemetry = previous ? await r.getTelemetryForCycle(previous.id) : [];
   const lexical = await r.getLexicalItems(user.id, user.target_language);
 
+  // ⚠️ باگ رفع‌شده: پیش از این فقط «وجود» درس روز ۶ چک می‌شد و فیلتر روی
+  // **کل چرخه** اعمال می‌شد — یعنی «امتیاز آزمون پنهان» در واقع میانگین دقت
+  // هر ۷ روز بود و به AI سیگنال غلط می‌داد. حالا فقط پاسخ‌های همان درس.
   const day6 = previousLessons.find((l) => l.day_number === 6);
   let hiddenScore: number | null = null;
   if (day6) {
-    const day6Answers = telemetry.filter((t) => t.event_type === 'ANSWER');
+    const day6Answers = telemetry.filter(
+      (t) => t.event_type === 'ANSWER' && t.lesson_id === day6.id
+    );
     if (day6Answers.length > 0) {
       const correct = day6Answers.filter((a) => a.is_correct).length;
       hiddenScore = Math.round((correct / day6Answers.length) * 100);
@@ -685,6 +691,19 @@ async function buildGenerationInput(
  * و بهینه‌سازی جدید هرگز به کاربر نمی‌رسد.
  */
 const CACHE_CONTENT_VERSION = 3;
+
+/**
+ * نسخهٔ «شکل» محتوای **درس** (جدا از outline).
+ *
+ * ⚠️ چرا دو شمارنده: outline و درس مستقل تکامل می‌یابند. تغییر پرامپت درس
+ * نباید outlineهای سالم را باطل کند (و برعکس) — هر باطل‌سازی یعنی تولید
+ * دوباره و هزینهٔ AI.
+ * ⚠️ پیش از این کلید کش درس **هیچ نسخه‌ای نداشت** → با بالا بردن
+ * `CACHE_CONTENT_VERSION` فقط outline باطل می‌شد و درس‌های کهنه می‌ماندند
+ * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
+ * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
+ */
+const LESSON_CONTENT_VERSION = 2;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -829,7 +848,7 @@ async function ensureLessonContent(
   outline: CycleOutline,
   variant: number
 ): Promise<GeneratedLesson | null> {
-  const key = cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant);
+  const key = `${cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant)}:c${LESSON_CONTENT_VERSION}`;
   const cached = (await r.getCachedContent('LESSON', key)) as GeneratedLesson | null;
   if (cached) return cached;
 

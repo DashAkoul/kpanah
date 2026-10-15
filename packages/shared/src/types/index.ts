@@ -186,6 +186,38 @@ export interface RealApplicationPart {
   questions: ApplicationQuestion[];
 }
 
+/** آیتم اسکلت — فقط واژه (جزئیات از کش سطح واژه می‌آید) */
+export interface SkeletonItem {
+  term: string;
+  substitution?: {
+    base: string;
+    slots: string[];
+  };
+}
+
+/** کارت واژهٔ تازه که مدل در حالت اسکلت برمی‌گرداند */
+export interface NewTermCard {
+  term: string;
+  meaning: string;
+  pronunciation?: string;
+  example: string;
+  exampleTranslation?: string;
+}
+
+/** خروجی خام مرحلهٔ A — قبل از پر شدن جزئیات از کش */
+export interface LessonSkeleton {
+  dayNumber: number;
+  title: string;
+  titleUi: string;
+  kind: LessonKind;
+  part1: {
+    type: 'PATTERN_DRILL';
+    items: SkeletonItem[];
+  };
+  part2: RealApplicationPart;
+  newCards?: NewTermCard[];
+}
+
 export type Part1Data = PatternDrillPart;
 export type Part2Data = RealApplicationPart;
 

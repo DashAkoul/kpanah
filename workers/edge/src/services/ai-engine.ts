@@ -2,6 +2,7 @@ import type { z } from 'zod';
 import {
   generatedCycleSchema,
   generatedLessonSchema,
+  lessonSkeletonSchema,
   cycleOutlineSchema,
   validateWithDetail,
   CYCLE_SCHEDULE,
@@ -11,6 +12,7 @@ import {
   type CycleGenerationInput,
   type GeneratedCycle,
   type GeneratedLesson,
+  type LessonSkeleton,
   type CycleOutline,
   type OutlineDay,
 } from '@kpanah/shared';
@@ -156,6 +158,42 @@ export class AiEngine {
     return {
       lesson: r.value ? normalizeLessonTitles(r.value) : null,
       attempts: r.attempts, model: r.model, totalMs: r.totalMs,
+    };
+  }
+
+  /**
+   * مرحلهٔ A تولید دو مرحله‌ای — «اسکلت» درس.
+   *
+   * ⚠️ چرا: گران‌ترین بخش هر درس، جزئیات هر واژه است (معنا/تلفظ/مثال/ترجمه)
+   * و این جزئیات **بین همهٔ کاربران مشترک‌اند**. پس مدل فقط ساختار را
+   * می‌دهد (صحنه + سوال‌ها + فهرست واژه‌ها) و برای واژه‌های **ناشناخته**
+   * جزئیات را در `newCards` برمی‌گرداند تا یک بار برای همیشه ذخیره شوند.
+   *
+   * @param knownTerms واژه‌هایی که از قبل کارت دارند — مدل نباید دوباره
+   *   جزئیاتشان را بسازد (صرفه‌جویی مستقیم توکن).
+   */
+  async generateLessonSkeleton(
+    input: CycleGenerationInput,
+    day: OutlineDay,
+    outline: CycleOutline,
+    knownTerms: string[]
+  ): Promise<{
+    skeleton: LessonSkeleton | null;
+    attempts: AiAttempt[];
+    model: string;
+    totalMs: number;
+  }> {
+    const r = await this.runChain(
+      lessonSkeletonSchema,
+      buildLessonSkeletonSystemPrompt(input, knownTerms),
+      buildLessonSkeletonUserPrompt(input, day, outline, knownTerms),
+      'lesson-skeleton'
+    );
+    return {
+      skeleton: r.value ? (r.value as LessonSkeleton) : null,
+      attempts: r.attempts,
+      model: r.model,
+      totalMs: r.totalMs,
     };
   }
 
@@ -726,18 +764,26 @@ function pedagogyBlock(input: CycleGenerationInput): string {
   ].join('\n');
 }
 
-/** خلاصهٔ عملکرد کاربر (delta) — برای شخصی‌سازی */
-function deltaBlock(input: CycleGenerationInput): string {
+/**
+ * خلاصهٔ عملکرد کاربر (delta) — برای شخصی‌سازی.
+ *
+ * ⚠️ `compact` برای فراخوانی **تک‌روز** است: فهرست کامل ۲۵+۳۰ واژه برای
+ * ساختن یک روز لازم نیست و فقط توکن ورودی می‌سوزاند (~۱۵۰ توکن در هر
+ * فراخوانی). outline که تصویر کامل چرخه را می‌سازد، فهرست کامل می‌گیرد.
+ */
+function deltaBlock(input: CycleGenerationInput, compact = false): string {
   const d = input.delta;
+  const weakLimit = compact ? 12 : 25;
+  const masteredLimit = compact ? 10 : 30;
   const lines: string[] = [];
   lines.push(`PERFORMANCE SNAPSHOT: answers ${d.totalAnswers}, accuracy ${d.accuracyPct}%, avg ${d.averageResponseMs}ms.`);
   if (d.accuracyPct < 60) lines.push('CALIBRATION: accuracy < 60% → smaller vocabulary per day, more repetition, shorter sentences.');
   if (d.accuracyPct > 90) lines.push('CALIBRATION: accuracy > 90% and fast → push complexity up a notch.');
   if (d.weakTerms.length > 0) {
-    lines.push(`WEAK TERMS (must be recycled): ${d.weakTerms.slice(0, 25).map((w) => `${w.term} (box ${w.box})`).join(', ')}`);
+    lines.push(`WEAK TERMS (must be recycled): ${d.weakTerms.slice(0, weakLimit).map((w) => `${w.term} (box ${w.box})`).join(', ')}`);
   }
   if (d.masteredTerms.length > 0) {
-    lines.push(`MASTERED (scaffold only, do not re-teach): ${d.masteredTerms.slice(0, 30).join(', ')}`);
+    lines.push(`MASTERED (scaffold only, do not re-teach): ${d.masteredTerms.slice(0, masteredLimit).join(', ')}`);
   }
   if (d.weakestAreas.length > 0) lines.push(`WEAKEST AREAS: ${d.weakestAreas.join(', ')}`);
   if (input.previousCycleSummary) {
@@ -820,7 +866,7 @@ function buildLessonUserPrompt(
     `Day objective: ${objective}`,
     `Day phase: ${profile.phase} — ${profile.emphasis}`,
     '',
-    deltaBlock(input),
+    deltaBlock(input, true),
     '',
     `Content budget for this day (do not exceed):`,
     `- part1 items: ${profile.items.min}-${profile.items.max}`,
@@ -840,6 +886,87 @@ function buildLessonUserPrompt(
       : day.kind === 'HIDDEN_ASSESSMENT'
         ? `- This is HIDDEN_ASSESSMENT but must look like a normal teaching day. Never mention tests/scores.`
         : `- part2: REAL_APPLICATION with 2-6 questions in a concrete scenario.`,
+    `- dayNumber MUST be ${day.dayNumber}, kind MUST be ${day.kind}.`,
+    `- title/titleUi should match the outline: "${day.title}".`,
+  ].join('\n');
+}
+
+/** پرامپت مرحلهٔ A — خروجی «اسکلت» (بدون جزئیات واژه) */
+function buildLessonSkeletonSystemPrompt(
+  input: CycleGenerationInput,
+  knownTerms: string[]
+): string {
+  const knownLine = knownTerms.length
+    ? `KNOWN TERMS (already have cards — do NOT repeat their details): ${knownTerms.join(', ')}`
+    : `KNOWN TERMS: (none yet — every term needs a card in "newCards")`;
+
+  return [
+    `You are an expert adaptive language tutor writing ONE day of an existing 7-day cycle.`,
+    ``,
+    pedagogyBlock(input),
+    ``,
+    `The cycle outline is already fixed — stay consistent with it and do not change its topic.`,
+    `Write ONLY the requested day.`,
+    ``,
+    `⚠️ SPLIT OUTPUT — the most important rule:`,
+    `1. "part1.items" lists the words/phrases to drill. For each item give ONLY`,
+    `   "term" (plus an optional "substitution" pattern). NEVER write "meaning",`,
+    `   "pronunciation", "example" or "exampleTranslation" inside an item.`,
+    `2. "newCards" carries the full details (meaning, pronunciation, example,`,
+    `   exampleTranslation) ONLY for terms that are NOT in the KNOWN TERMS list.`,
+    `   If every term you picked is already known, omit "newCards" entirely.`,
+    ``,
+    knownLine,
+    ``,
+    `⚠️ INTEGRITY RULE: every "term" in "part1.items" must EITHER appear in`,
+    `   KNOWN TERMS OR have a matching entry in "newCards". A term with neither`,
+    `   makes the lesson unrenderable.`,
+    ``,
+    `Output ONE JSON object matching the provided schema. No markdown, no commentary.`,
+    ``,
+    `EXAMPLE of the required shape (copy the STRUCTURE only, never the content):`,
+    `{"dayNumber":3,"title":"...","titleUi":"...","kind":"TEACHING",`,
+    `"part1":{"type":"PATTERN_DRILL","items":[{"term":"...",`,
+    `"substitution":{"base":"I would like ___","slots":["a coffee","water"]}}]},`,
+    `"part2":{"type":"REAL_APPLICATION","scenario":"...","questions":[{"id":"q1",`,
+    `"prompt":"...","options":["...","..."],"correctIndex":0,"explanation":"...","linkedTerm":"..."}]},`,
+    `"newCards":[{"term":"...","meaning":"...","example":"...","exampleTranslation":"..."}]}`,
+  ].join('\n');
+}
+
+/** ورودی مرحلهٔ A — همان ورودی درس + فهرست واژه‌های شناخته‌شده */
+function buildLessonSkeletonUserPrompt(
+  input: CycleGenerationInput,
+  day: OutlineDay,
+  outline: CycleOutline,
+  knownTerms: string[]
+): string {
+  const profile = dayProfile(day.dayNumber);
+  const objective = day.objective ?? profile.objective;
+
+  return [
+    `Cycle: ${outline.title} — ${outline.focusSummary}`,
+    `Full outline: ${outline.days.map((d) => `D${d.dayNumber}(${d.kind}) ${d.title}`).join(' | ')}`,
+    '',
+    `NOW WRITE DAY ${day.dayNumber}: "${day.title}" (kind ${day.kind}).`,
+    `Day objective: ${objective}`,
+    `Day phase: ${profile.phase} — ${profile.emphasis}`,
+    '',
+    deltaBlock(input, true),
+    '',
+    `Content budget for this day (do not exceed):`,
+    `- part1 items: ${profile.items.min}-${profile.items.max}`,
+    `- part2 questions: ${profile.part2.min}-${profile.part2.max}`,
+    `- share of items that must be BRAND NEW: ${Math.round(profile.newItemRatio * 100)}%`,
+    `- the rest must REVIEW items from earlier days of this cycle.`,
+    '',
+    `Rules for this day:`,
+    `- part1.items: give ONLY "term" (+ optional "substitution"). No per-item details.`,
+    `- ${knownTerms.length} term(s) already have cards: reuse them by name, do NOT re-describe them.`,
+    `- If WEAK TERMS were listed above, they are the PREFERRED SOURCE for the REVIEW`,
+    `  share of this day — never for the BRAND NEW share. The budget above wins.`,
+    `- Do NOT produce "explanation", "pattern", "patternTranslation", "dialogue" or`,
+    `  "scenarioTranslation" — they are not part of the schema.`,
     `- dayNumber MUST be ${day.dayNumber}, kind MUST be ${day.kind}.`,
     `- title/titleUi should match the outline: "${day.title}".`,
   ].join('\n');
@@ -942,6 +1069,76 @@ function buildLessonJsonSchema(): Record<string, unknown> {
   };
 }
 
+/** اسکیمای «اسکلت» درس — آیتم‌ها فقط `term` دارند، جزئیات در `newCards` */
+function buildLessonSkeletonJsonSchema(): Record<string, unknown> {
+  return {
+    type: 'object',
+    properties: {
+      dayNumber: { type: 'integer', minimum: 1, maximum: 7 },
+      title: jsonStr('Target-language title'),
+      titleUi: jsonStr('Title in the learner UI language'),
+      kind: { type: 'string', enum: KIND_ENUM },
+      part1: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['PATTERN_DRILL'] },
+          items: {
+            type: 'array',
+            minItems: 3,
+            maxItems: 12,
+            items: {
+              type: 'object',
+              properties: {
+                term: jsonStr('The target-language word or phrase'),
+                substitution: {
+                  type: 'object',
+                  properties: {
+                    base: jsonStr('Base sentence with a slot'),
+                    slots: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
+                  },
+                  required: ['base', 'slots'],
+                },
+              },
+              required: ['term'],
+            },
+          },
+        },
+        required: ['type', 'items'],
+      },
+      part2: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['REAL_APPLICATION'] },
+          scenario: jsonStr('Real-world scenario in the UI language'),
+          questions: {
+            type: 'array',
+            items: applicationQuestionJson(),
+            minItems: 2,
+            maxItems: 10,
+          },
+        },
+        required: ['type', 'scenario', 'questions'],
+      },
+      newCards: {
+        type: 'array',
+        maxItems: 12,
+        items: {
+          type: 'object',
+          properties: {
+            term: jsonStr('The target-language word or phrase'),
+            meaning: jsonStr('Meaning in the learner UI language'),
+            pronunciation: jsonStr('Optional romanisation'),
+            example: jsonStr('One short example sentence in the target language'),
+            exampleTranslation: jsonStr('Translation into the learner UI language'),
+          },
+          required: ['term', 'meaning', 'example'],
+        },
+      },
+    },
+    required: ['dayNumber', 'title', 'titleUi', 'kind', 'part1', 'part2'],
+  };
+}
+
 /**
  * اسکیمای طرح کلی (outline) — سبک و ارزان: فقط عنوان و نوع و هدف هر روز.
  */
@@ -1019,6 +1216,7 @@ function compactSchema(node: unknown): string {
  */
 export function jsonSchemaFor(tag: string): unknown {
   if (tag === 'outline') return buildOutlineJsonSchema();
+  if (tag === 'lesson-skeleton') return buildLessonSkeletonJsonSchema();
   return buildLessonJsonSchema();
 }
 

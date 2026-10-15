@@ -88,6 +88,37 @@ describe('lesson schema — structural integrity', () => {
     );
   });
 
+  it('returns the skeleton schema for the "lesson-skeleton" tag', () => {
+    // مرحلهٔ A تولید دو مرحله‌ای: آیتم‌ها فقط `term` دارند و جزئیات واژه‌های
+    // تازه در `newCards` می‌آید. این تنها چیزی است که صرفه‌جویی توکن را
+    // ممکن می‌کند — اگر `meaning`/`example` به آیتم برگردند، مدل دوباره
+    // همه را تولید می‌کند و صرفه‌جویی از بین می‌رود.
+    const s = jsonSchemaFor('lesson-skeleton') as JsonSchema;
+    const part1 = s.properties!.part1 as JsonSchema;
+    const items = part1.properties!.items as JsonSchema;
+    const itemProps = Object.keys(items.items!.properties!);
+
+    expect(itemProps).toContain('term');
+    expect(itemProps).not.toContain('meaning');
+    expect(itemProps).not.toContain('example');
+    expect(itemProps).not.toContain('exampleTranslation');
+    expect(itemProps).not.toContain('pronunciation');
+
+    // جزئیات باید در newCards باشند (برای واژه‌های ناشناخته)
+    const newCards = s.properties!.newCards as JsonSchema;
+    const cardProps = Object.keys(newCards.items!.properties!);
+    expect(cardProps).toEqual(expect.arrayContaining(['term', 'meaning', 'example']));
+  });
+
+  it('keeps part2 complete in the skeleton (scenario + questions)', () => {
+    // بخش ۲ به همین درس وابسته است و بین کاربران مشترک نیست، پس کامل می‌ماند
+    const s = jsonSchemaFor('lesson-skeleton') as JsonSchema;
+    const part2 = s.properties!.part2 as JsonSchema;
+    expect(Object.keys(part2.properties!)).toEqual(
+      expect.arrayContaining(['type', 'scenario', 'questions'])
+    );
+  });
+
   it('does NOT emit the token-wasting fields that the UI never renders', () => {
     // ⚠️ قفل صرفه‌جویی: این فیلدها تولید و اعتبارسنجی می‌شدند ولی هیچ‌وقت
     // در UI دیده نمی‌شدند (~۱٬۱۰۰ توکن هدر در هر درس). نباید برگردند

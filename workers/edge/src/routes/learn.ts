@@ -17,6 +17,8 @@ import type {
   SkillDelta,
   WeakTerm,
   TermCard,
+  PatternDrillItem,
+  LessonSkeleton,
   CycleGenerationInput,
   CycleOutline,
   OutlineDay,
@@ -883,8 +885,10 @@ async function runModularGeneration(
   // ── ۲. روز ۱ ─────────────────────────────────────────────────────
   const day1 = outline.days[0]!;
   const lesson1 = await ensureLessonContent(
-    r, engine, cycleId, input, day1, outline, variant, personalizedCache(env)
-  );
+    r, engine, cycleId, input, day1, outline, variant, {
+    personalize: personalizedCache(env),
+    twoStage: twoStageEnabled(env),
+  });
   if (!lesson1) {
     return { ok: false, error: 'day-1 generation failed' };
   }
@@ -954,6 +958,14 @@ async function runModularGeneration(
   }
 
   return { ok: true };
+}
+
+/**
+ * آیا تولید دو مرحله‌ای (اسکلت → جزئیات) روشن است؟
+ * `TWO_STAGE_LESSON=false` به مسیر تک‌فراخوانی برمی‌گرداند.
+ */
+function twoStageEnabled(env: RequestContext['env']): boolean {
+  return String(env.TWO_STAGE_LESSON ?? 'true') !== 'false';
 }
 
 /**
@@ -1057,6 +1069,99 @@ async function alignTermCards(
   return { ...lesson, part1: { ...lesson.part1, items: alignedItems } };
 }
 
+/**
+ * واژه‌های «شناخته‌شده» برای مرحلهٔ A.
+ *
+ * ⚠️ فقط واژه‌های ضعیف کاربر بررسی می‌شوند (نه کل جدول): همان‌هایی که
+ * احتمال دارد در درس مروری ظاهر شوند. فهرست کوچک = پرامپت کوچک‌تر.
+ */
+async function knownTermsForUser(
+  r: ContentRepository,
+  input: CycleGenerationInput
+): Promise<string[]> {
+  const weak = input.delta.weakTerms.slice(0, 20).map((w) => w.term);
+  if (weak.length === 0) return [];
+  try {
+    const cards = await r.findTermCards(
+      input.user.targetLanguage,
+      input.user.uiLanguage,
+      weak
+    );
+    return Object.values(cards).map((card) => card.term);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * مرحلهٔ B — پر کردن جزئیات «اسکلت» از کش سطح واژه.
+ *
+ * @returns درس کامل، یا `null` اگر واژه‌ای بدون کارت ماند.
+ *
+ * ⚠️ `null` یعنی **fallback**: به‌جای نشان‌دادن درسی با فیلدهای خالی،
+ * مسیر کامل (تک‌فراخوانی) اجرا می‌شود. این تنها محافظِ درستی است —
+ * مدل ممکن است قاعدهٔ «هر واژه باید کارت داشته باشد» را نقض کند.
+ */
+async function hydrateSkeleton(
+  r: ContentRepository,
+  input: CycleGenerationInput,
+  skeleton: LessonSkeleton
+): Promise<GeneratedLesson | null> {
+  const language = input.user.targetLanguage;
+  const uiLanguage = input.user.uiLanguage;
+
+  // کارت‌های تازه را **اول** ذخیره کن تا در همان نقشه حاضر باشند
+  if (skeleton.newCards?.length) {
+    await r
+      .saveTermCards(
+        language,
+        uiLanguage,
+        skeleton.newCards.map((card) => ({
+          term: card.term,
+          meaning: card.meaning,
+          pronunciation: card.pronunciation,
+          example: card.example,
+          exampleTranslation: card.exampleTranslation,
+        }))
+      )
+      .catch(() => undefined);
+  }
+
+  const cards = await r.findTermCards(
+    language,
+    uiLanguage,
+    skeleton.part1.items.map((item) => item.term)
+  );
+
+  const items: PatternDrillItem[] = [];
+  for (const item of skeleton.part1.items) {
+    const card = cards[item.term.trim().toLowerCase()];
+    if (!card?.meaning || !card.example) return null; // → fallback
+    items.push({
+      term: item.term,
+      meaning: card.meaning,
+      pronunciation: card.pronunciation,
+      example: card.example,
+      exampleTranslation: card.exampleTranslation,
+      // کارت فیلد speakText ندارد؛ مثال خام کافی است چون `cleanForSpeech`
+      // خودش نشانه‌های نوشتاری را پاک می‌کند.
+      speakText: card.example,
+      substitution: item.substitution,
+    });
+  }
+
+  if (items.length === 0) return null;
+
+  return {
+    dayNumber: skeleton.dayNumber,
+    title: skeleton.title,
+    titleUi: skeleton.titleUi,
+    kind: skeleton.kind,
+    part1: { type: 'PATTERN_DRILL', items },
+    part2: skeleton.part2,
+  };
+}
+
 /** تولید (یا خواندن از کش) محتوای یک روز */
 async function ensureLessonContent(
   r: ContentRepository,
@@ -1071,11 +1176,16 @@ async function ensureLessonContent(
    * خاموش می‌شود — چون شخصی‌سازی واقعی نرخ اصابت کش را کم و هزینه را زیاد
    * می‌کند؛ این کلید فرار برای وقتی است که هزینه اولویت داشته باشد.
    */
-  personalizeEnabled: boolean
+  options: {
+    /** آیا نقاط ضعف کاربر در کلید کش اثر بگذارند؟ (`PERSONALIZED_CACHE`) */
+    personalize: boolean;
+    /** آیا مسیر دو مرحله‌ای (اسکلت → جزئیات) فعال است؟ (`TWO_STAGE_LESSON`) */
+    twoStage: boolean;
+  }
 ): Promise<GeneratedLesson | null> {
   // ⚠️ روزهای مرورمحور اثر انگشت نقاط ضعف می‌گیرند تا محتوا واقعاً حول
   // واژه‌های ضعیف همین کاربر ساخته شود؛ روزهای تمام‌جدید مشترک می‌مانند.
-  const personalize = personalizeEnabled && dayProfile(day.dayNumber).newItemRatio < 1;
+  const personalize = options.personalize && dayProfile(day.dayNumber).newItemRatio < 1;
   const fingerprint = personalize ? weaknessFingerprint(input, true) : 'w0';
   const key = `${cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant)}:${fingerprint}:c${LESSON_CONTENT_VERSION}`;
 
@@ -1084,6 +1194,35 @@ async function ensureLessonContent(
     // حتی برای کش‌شده هم کارت‌ها را تازه نگه دار (ممکن است واژه‌ای تازه
     // به کش اضافه شده باشد و باید با آن هم‌تراز شود).
     return alignTermCards(r, input, cached);
+  }
+
+  // ── مسیر دو مرحله‌ای (ارزان‌تر) ──────────────────────────────────
+  // ⚠️ فقط روی روزهای مرورم‌حور و نه CONSOLIDATION:
+  //   • روزهای تمام‌جدید همهٔ واژه‌ها تازه‌اند، پس صرفه‌جویی صفر است
+  //   • روز ۷ عمداً مثال‌های **تازه** برای واژه‌های ضعیف می‌خواهد، پس
+  //     مثالِ ثابتِ کارت به کار نمی‌آید
+  const twoStageDay =
+    options.twoStage &&
+    day.kind !== 'CONSOLIDATION' &&
+    dayProfile(day.dayNumber).newItemRatio < 1;
+
+  if (twoStageDay) {
+    const knownTerms = await knownTermsForUser(r, input);
+    const sk = await engine.generateLessonSkeleton(input, day, outline, knownTerms);
+    await recordAttempts(r, cycleId, sk.attempts);
+
+    if (sk.skeleton) {
+      const hydrated = await hydrateSkeleton(r, input, sk.skeleton);
+      if (hydrated) {
+        await r.putCachedContent('LESSON', key, input.user.targetLanguage, hydrated);
+        return hydrated;
+      }
+      // ⚠️ واژه‌ای بدون کارت ماند → به مسیر کامل برمی‌گردیم تا کاربر
+      // درسی با فیلدهای خالی نبیند (یک فراخوانی اضافه، ولی نادر).
+      console.warn(
+        `[two-stage] hydration failed for day ${day.dayNumber} → falling back to full generation`
+      );
+    }
   }
 
   const res = await engine.generateLesson(input, day, outline);
@@ -1115,8 +1254,10 @@ async function generateLessonJob(
   }
 
   const lesson = await ensureLessonContent(
-    r, engine, cycleId, input, day, outline, variant, personalizedCache(env)
-  );
+    r, engine, cycleId, input, day, outline, variant, {
+    personalize: personalizedCache(env),
+    twoStage: twoStageEnabled(env),
+  });
   if (!lesson) return false;
   // روزهای بعدی LOCKED می‌مانند؛ منطق باز شدن روزها جداست
   await r.fillLessonContent(cycleId, day.dayNumber, lesson, 'LOCKED');

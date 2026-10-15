@@ -11,10 +11,12 @@ import {
   shouldGenerateNextCycle,
   CYCLE_LENGTH_DAYS,
   ECONOMY,
+  dayProfile,
 } from '@kpanah/shared';
 import type {
   SkillDelta,
   WeakTerm,
+  TermCard,
   CycleGenerationInput,
   CycleOutline,
   OutlineDay,
@@ -880,7 +882,9 @@ async function runModularGeneration(
 
   // ── ۲. روز ۱ ─────────────────────────────────────────────────────
   const day1 = outline.days[0]!;
-  const lesson1 = await ensureLessonContent(r, engine, cycleId, input, day1, outline, variant);
+  const lesson1 = await ensureLessonContent(
+    r, engine, cycleId, input, day1, outline, variant, personalizedCache(env)
+  );
   if (!lesson1) {
     return { ok: false, error: 'day-1 generation failed' };
   }
@@ -952,6 +956,107 @@ async function runModularGeneration(
   return { ok: true };
 }
 
+/**
+ * آیا شخصی‌سازی کش روشن است؟ `PERSONALIZED_CACHE=false` خاموشش می‌کند.
+ * پیش‌فرض روشن است چون شخصی‌سازی واقعی وعدهٔ اصلی محصول است.
+ */
+function personalizedCache(env: RequestContext['env']): boolean {
+  return String(env.PERSONALIZED_CACHE ?? 'true') !== 'false';
+}
+
+/** هش کوتاه و پایدار (FNV-1a) — فقط برای ساخت اثر انگشت کلید کش */
+function shortHash(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+/**
+ * اثر انگشت «نقاط ضعف» کاربر برای کلید کش درس.
+ *
+ * ⚠️ مشکلی که حل می‌کند: کلید کش هیچ نشانی از نقاط ضعف کاربر نداشت، پس
+ * درسی که حول واژه‌های ضعیف کاربر A ساخته شده بود **بی‌کم‌وکاست** به کاربر
+ * B هم داده می‌شد. یعنی کش داشتیم ولی «شخصی‌سازی» اسمی بود.
+ *
+ * ⚠️ اثر انگشت **درشت** است (۶ واژهٔ اول، مرتب‌شده و کوچک‌شده):
+ *   • مرتب‌سازی → ترتیب تصادفی لیست دو کلید متفاوت نمی‌سازد
+ *   • فقط ۶ واژه → کاربران با پروفایل مشابه محتوا را به اشتراک می‌گذارند
+ *     (نرخ اصابت کش کاملاً از بین نمی‌رود)
+ * ⚠️ روی روزهای **تمام‌جدید** (`newItemRatio === 1`) اعمال نمی‌شود چون
+ * آنجا مروری در کار نیست و شخصی‌سازی بی‌معناست — کش مشترک می‌ماند.
+ */
+function weaknessFingerprint(input: CycleGenerationInput, enabled: boolean): string {
+  if (!enabled) return 'w0';
+  const weak = input.delta.weakTerms
+    .slice(0, 6)
+    .map((w) => w.term.trim().toLowerCase())
+    .sort()
+    .join('|');
+  return weak ? `w${shortHash(weak)}` : 'w0';
+}
+
+/**
+ * هم‌ترازی جزئیات واژه‌های یک درس با کش سطح واژه (`term_cards`).
+ *
+ * ⚠️ مشکلی که حل می‌کند: پیش از این هر درس معنا/مثال خودش را از صفر
+ * می‌ساخت، پس یک واژه در سه درس سه ترجمه و سه مثال متفاوت می‌گرفت —
+ * برای یادگیرنده گیج‌کننده و برخلاف «ثبات» بود.
+ *
+ * ⚠️ این کار روی **خروجی** انجام می‌شود، نه با افزودن چیز به پرامپت →
+ * **صفر توکن اضافه**. کارتِ موجود مرجع است؛ کارتِ تازه ذخیره می‌شود تا
+ * درس‌های بعدی همان را بگیرند («نخستین نوشته برنده است»).
+ */
+async function alignTermCards(
+  r: ContentRepository,
+  input: CycleGenerationInput,
+  lesson: GeneratedLesson
+): Promise<GeneratedLesson> {
+  const items = lesson.part1?.items ?? [];
+  if (items.length === 0) return lesson;
+
+  const language = input.user.targetLanguage;
+  const uiLanguage = input.user.uiLanguage;
+
+  let known: Record<string, TermCard> = {};
+  try {
+    known = await r.findTermCards(language, uiLanguage, items.map((i) => i.term));
+  } catch {
+    return lesson; // کش اختیاری است — خطا نباید تولید را بشکند
+  }
+
+  const alignedItems = items.map((item) => {
+    const card = known[item.term.trim().toLowerCase()];
+    if (!card) return item;
+    return {
+      ...item,
+      meaning: card.meaning || item.meaning,
+      pronunciation: card.pronunciation ?? item.pronunciation,
+      example: card.example ?? item.example,
+      exampleTranslation: card.exampleTranslation ?? item.exampleTranslation,
+    };
+  });
+
+  const freshCards: TermCard[] = alignedItems
+    .filter((item) => !known[item.term.trim().toLowerCase()])
+    .map((item) => ({
+      term: item.term,
+      meaning: item.meaning,
+      pronunciation: item.pronunciation,
+      example: item.example,
+      exampleTranslation: item.exampleTranslation,
+    }));
+
+  await r.saveTermCards(language, uiLanguage, freshCards).catch(() => undefined);
+  await r
+    .bumpTermCardUse(language, uiLanguage, alignedItems.map((i) => i.term))
+    .catch(() => undefined);
+
+  return { ...lesson, part1: { ...lesson.part1, items: alignedItems } };
+}
+
 /** تولید (یا خواندن از کش) محتوای یک روز */
 async function ensureLessonContent(
   r: ContentRepository,
@@ -960,18 +1065,35 @@ async function ensureLessonContent(
   input: CycleGenerationInput,
   day: OutlineDay,
   outline: CycleOutline,
-  variant: number
+  variant: number,
+  /**
+   * آیا نقاط ضعف کاربر در کلید کش اثر بگذارند؟ با `PERSONALIZED_CACHE=false`
+   * خاموش می‌شود — چون شخصی‌سازی واقعی نرخ اصابت کش را کم و هزینه را زیاد
+   * می‌کند؛ این کلید فرار برای وقتی است که هزینه اولویت داشته باشد.
+   */
+  personalizeEnabled: boolean
 ): Promise<GeneratedLesson | null> {
-  const key = `${cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant)}:c${LESSON_CONTENT_VERSION}`;
+  // ⚠️ روزهای مرورمحور اثر انگشت نقاط ضعف می‌گیرند تا محتوا واقعاً حول
+  // واژه‌های ضعیف همین کاربر ساخته شود؛ روزهای تمام‌جدید مشترک می‌مانند.
+  const personalize = personalizeEnabled && dayProfile(day.dayNumber).newItemRatio < 1;
+  const fingerprint = personalize ? weaknessFingerprint(input, true) : 'w0';
+  const key = `${cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant)}:${fingerprint}:c${LESSON_CONTENT_VERSION}`;
+
   const cached = (await r.getCachedContent('LESSON', key)) as GeneratedLesson | null;
-  if (cached) return cached;
+  if (cached) {
+    // حتی برای کش‌شده هم کارت‌ها را تازه نگه دار (ممکن است واژه‌ای تازه
+    // به کش اضافه شده باشد و باید با آن هم‌تراز شود).
+    return alignTermCards(r, input, cached);
+  }
 
   const res = await engine.generateLesson(input, day, outline);
   await recordAttempts(r, cycleId, res.attempts);
   if (!res.lesson) return null;
 
-  await r.putCachedContent('LESSON', key, input.user.targetLanguage, res.lesson);
-  return res.lesson;
+  // هم‌ترازی با کش سطح واژه قبل از ذخیره → محتوای کش‌شده هم ثابت است
+  const aligned = await alignTermCards(r, input, res.lesson);
+  await r.putCachedContent('LESSON', key, input.user.targetLanguage, aligned);
+  return aligned;
 }
 
 /** تولید و ذخیرهٔ یک روز مشخص (استفاده در job پس‌زمینه) */
@@ -992,7 +1114,9 @@ async function generateLessonJob(
     return true;
   }
 
-  const lesson = await ensureLessonContent(r, engine, cycleId, input, day, outline, variant);
+  const lesson = await ensureLessonContent(
+    r, engine, cycleId, input, day, outline, variant, personalizedCache(env)
+  );
   if (!lesson) return false;
   // روزهای بعدی LOCKED می‌مانند؛ منطق باز شدن روزها جداست
   await r.fillLessonContent(cycleId, day.dayNumber, lesson, 'LOCKED');

@@ -1724,13 +1724,16 @@ export class ContentRepository {
     if (terms.length === 0) return {};
     try {
       // نام‌های کوچک برای تطبیق
-      const lowered = terms.map((t) => t.trim().toLowerCase());
+      // ⚠️ فیلتر روی خودِ کوئری (نه سمت کلاینت): با ۱۰ واژه درخواستی،
+      // کشیدن کل جدول یک زبان هم کند بود هم سهمیهٔ خواندن را می‌سوزاند.
+      const lowered = [...new Set(terms.map((t) => t.trim().toLowerCase()))];
       const rows = asRows(
         await this.db.select<Record<string, unknown>>('term_cards', {
           language: `eq.${language}`,
           ui_language: `eq.${uiLanguage}`,
+          term: `in.(${lowered.map((t) => `"${t.replace(/"/g, '')}"`).join(',')})`,
           select: 'term,meaning,pronunciation,example,example_translation,audio_key',
-          limit: String(lowered.length * 4),
+          limit: String(Math.max(lowered.length, 1)),
         })
       );
       const wanted = new Set(lowered);
@@ -1755,39 +1758,60 @@ export class ContentRepository {
     }
   }
 
-  /** ذخیرهٔ کارت‌های واژه (اگر کلمه در DB نبود، AI ساخته و اینجا ذخیره می‌شود) */
+  /**
+   * ذخیرهٔ کارت‌های واژه — فقط واژه‌های **جدید**.
+   *
+   * ⚠️ چرا insert ساده و نه upsert: ایندکس یکتای جدول روی
+   * `(language, lower(btrim(term)), ui_language)` است — یک **expression
+   * index**. `on_conflict` در PostgREST فقط با unique constraint روی همان
+   * ستون‌های خام کار می‌کند، پس `upsertOn: 'language,term,ui_language'`
+   * همیشه با خطای «no unique or exclusion constraint matching» رد می‌شد و
+   * چون خطا بی‌صدا بلعیده می‌شد، **هیچ کارتی هرگز ذخیره نمی‌شد**.
+   *
+   * راه‌حل بدون مهاجرت جدید: اول موجودها را بخوان، فقط غایب‌ها را بنویس.
+   * ⚠️ «نخستین نوشته برنده است» — کارت موجود هرگز بازنویسی نمی‌شود تا
+   * ترجمه/مثال یک واژه برای همیشه ثابت بماند.
+   */
   async saveTermCards(language: string, uiLanguage: string, cards: TermCard[]): Promise<void> {
     if (cards.length === 0) return;
-    const rows = cards.map((c) => ({
-      term: c.term,
-      language,
-      ui_language: uiLanguage,
-      meaning: c.meaning,
-      pronunciation: c.pronunciation ?? null,
-      example: c.example ?? null,
-      example_translation: c.exampleTranslation ?? null,
-      audio_key: c.audioKey ?? null,
-    }));
     try {
-      await this.db.insert('term_cards', rows, { upsertOn: 'language,term,ui_language' });
+      const existing = await this.findTermCards(
+        language,
+        uiLanguage,
+        cards.map((c) => c.term)
+      );
+      const fresh = cards.filter((c) => !existing[c.term.trim().toLowerCase()]);
+      if (fresh.length === 0) return;
+
+      const rows = fresh.map((c) => ({
+        term: c.term,
+        language,
+        ui_language: uiLanguage,
+        meaning: c.meaning,
+        pronunciation: c.pronunciation ?? null,
+        example: c.example ?? null,
+        example_translation: c.exampleTranslation ?? null,
+        audio_key: c.audioKey ?? null,
+      }));
+      await this.db.insert('term_cards', rows);
     } catch {
-      // اگر مهاجرت اجرا نشده باشد، بی‌صدا رد شو
+      // اگر مهاجرت اجرا نشده باشد، بی‌صدا رد شو (کش اختیاری است)
     }
   }
 
   /** افزایش شمارندهٔ استفادهٔ کارت‌ها (وقتی در یک درس به کار رفتند) */
   async bumpTermCardUse(language: string, uiLanguage: string, terms: string[]): Promise<void> {
     if (terms.length === 0) return;
-    const lowered = terms.map((t) => t.trim().toLowerCase());
-    for (const term of lowered) {
-      this.db
-        .rpc('bump_term_card_use', {
-          p_language: language,
-          p_ui_language: uiLanguage,
-          p_terms: [term],
-        })
-        .catch(() => {});
-    }
+    // ⚠️ یک فراخوانی برای کل دسته (قبلاً برای هر واژه یک RPC جدا می‌زد
+    // که با ۶ واژه در هر درس یعنی ۶ رفت‌وبرگشت اضافه به دیتابیس).
+    const lowered = [...new Set(terms.map((t) => t.trim().toLowerCase()))];
+    this.db
+      .rpc('bump_term_card_use', {
+        p_language: language,
+        p_ui_language: uiLanguage,
+        p_terms: lowered,
+      })
+      .catch(() => undefined);
   }
 
   /** آمار کش — چند بار در ماه از کش خوانده شده (معیار صرفه‌جویی توکن) */

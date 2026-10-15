@@ -19,6 +19,8 @@ export const DEFAULT_ENV: Partial<Env> = {
    * حدود ۴ برابر مصرف عادی جا دارد و فقط جلوی فاجعه را می‌گیرد.
    */
   AI_TOKEN_BUDGET_PER_DAY: '300000',
+  /** شخصی‌سازی واقعی کش درس (نقاط ضعف در کلید). `false` = کش مشترک */
+  PERSONALIZED_CACHE: 'true',
   GATE_PATH: '/kpanah56/8fjg7rfb/v1/gate',
 };
 

@@ -683,6 +683,43 @@ export class ContentRepository {
     await this.db.insert('telemetry_events', rows);
   }
 
+  /**
+   * مجموع توکن مصرفی AI یک کاربر از یک زمان مشخص تا حالا.
+   *
+   * ⚠️ چرا `ai_attempt_log` و نه `cycles.generation_tokens`: مسیر ماژولار
+   * هر روز را جدا می‌سازد و repair هم دارد؛ تنها لاگ تلاش‌ها کل مصرف را
+   * دارد. `cycles.generation_tokens` فقط خلاصهٔ یک گام است.
+   *
+   * ⚠️ در خطا `0` برمی‌گرداند: این سنجش یک محافظ است، نه شرط درستی —
+   * یک خطای موقت دیتابیس نباید تولید را کامل بخواباند.
+   */
+  async sumTokensForUserSince(userId: string, sinceIso: string): Promise<number> {
+    try {
+      const cycles = await this.db.select<{ id: string }>('cycles', {
+        user_id: `eq.${userId}`,
+        created_at: `gte.${sinceIso}`,
+        select: 'id',
+        limit: '50',
+      });
+      const ids = ((cycles as { id: string }[]) ?? []).map((row) => row.id);
+      if (ids.length === 0) return 0;
+
+      const rows = await this.db.select<{ tokens_used: number | null }>('ai_attempt_log', {
+        cycle_id: `in.(${ids.join(',')})`,
+        created_at: `gte.${sinceIso}`,
+        select: 'tokens_used',
+        limit: '2000',
+      });
+
+      return ((rows as { tokens_used: number | null }[]) ?? []).reduce(
+        (sum, row) => sum + (row.tokens_used ?? 0),
+        0
+      );
+    } catch {
+      return 0;
+    }
+  }
+
   async getTelemetryForCycle(cycleId: string): Promise<{
     event_type: string;
     lesson_id: string | null;

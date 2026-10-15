@@ -503,6 +503,62 @@ export async function handleCompleteLesson(
 // Cycle generation worker (shared by inline fallback and QStash)
 // ═════════════════════════════════════════════════════════════════════
 
+/**
+ * قفل کوتاه‌مدت تولید برای یک روز مشخص (کلید: `<cycleId>:<day>`).
+ *
+ * ⚠️ چرا لازم است: کرونِ هر ۵ دقیقه، consumer صف، و تولید تنبل در `home`
+ * می‌توانند همزمان همان روز را بسازند. `ensureLessonContent` کش را چک
+ * می‌کند ولی پنجرهٔ همزمانی (دو فراخوانی AI موازی پیش از نوشتن کش)
+ * باقی می‌ماند → توکن دوباره خرج می‌شود.
+ *
+ * ⚠️ KV برای این کار «کافی» است نه «کامل»: KV در نهایت سازگار است، پس
+ * ممکن است دو isolate همزمان قفل بگیرند. هدف **کاهش** تولید تکراری است،
+ * نه انحصار مطلق — به همین دلیل روی خطا اجازه می‌دهد (`true`).
+ */
+async function acquireGenerationLock(
+  env: RequestContext['env'],
+  key: string,
+  ttlSeconds = 180
+): Promise<boolean> {
+  const kv = env.CACHE_KV;
+  if (!kv) return true; // بدون KV، رفتار قبلی حفظ می‌شود
+  const full = `genlock:${key}`;
+  try {
+    if (await kv.get(full)) return false;
+    await kv.put(full, String(Date.now()), { expirationTtl: ttlSeconds });
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * سقف مصرف توکن AI هر کاربر در ۲۴ ساعت.
+ *
+ * ⚠️ چرا لازم است: `enforceRateLimit` فقط **تعداد درخواست** را می‌شمارد، نه
+ * هزینه. یک حلقهٔ باگ‌دار (یا کرون + lazy + صف که روی هم بیفتند) می‌تواند
+ * در چند ساعت کل سهمیهٔ کلید را بسوزاند بدون آنکه سقف درخواست رد شود.
+ *
+ * ⚠️ در خطای سنجش، اجازه می‌دهد (`ok: true`): محافظ است، نه شرط درستی.
+ */
+async function checkTokenBudget(
+  env: RequestContext['env'],
+  r: ContentRepository,
+  userId: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const budget = Number(env.AI_TOKEN_BUDGET_PER_DAY ?? 300_000);
+  if (!Number.isFinite(budget) || budget <= 0) return { ok: true };
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const used = await r.sumTokensForUserSince(userId, since);
+  if (used < budget) return { ok: true };
+
+  return {
+    ok: false,
+    reason: `daily AI token budget exhausted (${used}/${budget})`,
+  };
+}
+
 export async function runCycleGeneration(
   env: RequestContext['env'],
   userId: string,
@@ -535,6 +591,13 @@ export async function runCycleGeneration(
         : 'no AI provider could be resolved (check keys / PROVIDER_ENCRYPTION_KEY)';
     await markCycleFailed(r, generating.id, reason);
     return { ok: false, error: reason };
+  }
+
+  // ── سقف هزینه: قبل از هر فراخوانی AI ────────────────────────────
+  const budget = await checkTokenBudget(env, r, userId);
+  if (!budget.ok) {
+    await markCycleFailed(r, generating.id, budget.reason);
+    return { ok: false, error: budget.reason };
   }
 
   const generationInput = await buildGenerationInput(r, user, cycleNumber);
@@ -871,6 +934,13 @@ async function generateLessonJob(
   day: OutlineDay,
   variant: number
 ): Promise<boolean> {
+  // ⚠️ اگر isolate دیگری همین حالا مشغول همین روز است، دوباره AI نزن.
+  // `true` برمی‌گردانیم چون کار در حال انجام است، نه شکست‌خورده — وگرنه
+  // صف/کرون بی‌دلیل retry می‌کند.
+  if (!(await acquireGenerationLock(env, `${cycleId}:${day.dayNumber}`))) {
+    return true;
+  }
+
   const lesson = await ensureLessonContent(r, engine, cycleId, input, day, outline, variant);
   if (!lesson) return false;
   // روزهای بعدی LOCKED می‌مانند؛ منطق باز شدن روزها جداست
@@ -931,6 +1001,10 @@ export async function runLessonGeneration(
 
   const day = outline.days.find((d) => d.dayNumber === dayNumber);
   if (!day) return { ok: false, error: 'day not in outline' };
+
+  // ── سقف هزینه: قبل از هر فراخوانی AI ────────────────────────────
+  const budget = await checkTokenBudget(env, r, userId);
+  if (!budget.ok) return { ok: false, error: budget.reason };
 
   const input = await buildGenerationInput(r, user, cycleNumber);
   if (!input) return { ok: false, error: 'could not build generation input' };

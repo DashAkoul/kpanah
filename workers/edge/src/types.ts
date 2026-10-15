@@ -38,6 +38,11 @@ export interface Env {
    * پس‌زمینه. مقدار `'false'` آن را خاموش می‌کند (تولید کامل ۷ روزه).
    */
   MODULAR_GENERATION?: string;
+  /**
+   * سقف مصرف توکن AI هر کاربر در ۲۴ ساعت. `0` یا نامعتبر = بدون سقف.
+   * محافظت از کلید در برابر حلقهٔ باگ‌دار که کل سهمیه را می‌سوزاند.
+   */
+  AI_TOKEN_BUDGET_PER_DAY?: string;
 
   /**
    * Master secret for encrypting AI provider keys that admins enter through

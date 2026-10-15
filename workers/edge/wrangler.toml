@@ -102,6 +102,8 @@ AI_FALLBACK_MODELS = "deepseek-chat,claude-3-5-sonnet-latest"
 ENABLE_PAYLOAD_ENCRYPTION = "false"
 MODULAR_GENERATION = "true"
 BACKGROUND_BUDGET_MS = "20000"
+# سقف مصرف توکن AI هر کاربر در ۲۴ ساعت (محافظت از کلید). ۰ = بدون سقف.
+AI_TOKEN_BUDGET_PER_DAY = "300000"
 RATE_LIMIT_PER_MINUTE = "60"
 
 # ── تبدیل متن به صوت (سرویس آنلاین، بدون AI) ───────────────────────

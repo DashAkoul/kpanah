@@ -518,45 +518,6 @@ export class ContentRepository {
    * نوشتن چرخه تولیدشده + ۷ درس آن به‌صورت اتمی‌نما.
    * اگر درس‌ها fail شود، چرخه به FAILED می‌رود.
    */
-  async persistGeneratedCycle(
-    cycleId: string,
-    generated: GeneratedCycle,
-    meta: { model: string; ms: number; tokens?: number; input: CycleGenerationInput }
-  ): Promise<void> {
-    await this.db.update('cycles', { id: cycleId }, {
-      title: generated.title,
-      // ⚠️ titleUi جدید است؛ uiTitleOf هر دو نام را می‌پذیرد تا کش قدیمی
-      // (titleFa) هم NULL نوشته نشود.
-      title_fa: uiTitleOf(generated),
-      focus_summary: generated.focusSummary,
-      status: 'ACTIVE',
-      started_at: new Date().toISOString(),
-      generated_from: meta.input.delta as unknown as Record<string, unknown>,
-      generation_model: meta.model,
-      generation_ms: meta.ms,
-      generation_tokens: meta.tokens ?? null,
-    });
-
-    const cycle = await this.getCycleById(cycleId);
-    if (!cycle) throw new Error(`Cycle ${cycleId} vanished after update`);
-
-    const rows = generated.lessons.map((lesson, index) => ({
-      cycle_id: cycleId,
-      user_id: cycle.user_id,
-      day_number: lesson.dayNumber,
-      title: lesson.title,
-      title_fa: uiTitleOf(lesson),
-      kind: lesson.kind,
-      part_1_data: lesson.part1 as unknown as Record<string, unknown>,
-      part_2_data: lesson.part2 as unknown as Record<string, unknown>,
-      status: lesson.dayNumber === 1 ? 'AVAILABLE' : 'LOCKED',
-      is_completed: false,
-      _order: index,
-    }));
-
-    await this.db.insert('lessons', rows.map(({ _order, ...r }) => r));
-  }
-
   // ── تولید ماژولار ─────────────────────────────────────────────────
   // outline → روز ۱ → بقیه در پس‌زمینه
 
@@ -722,22 +683,63 @@ export class ContentRepository {
     await this.db.insert('telemetry_events', rows);
   }
 
+  /**
+   * مجموع توکن مصرفی AI یک کاربر از یک زمان مشخص تا حالا.
+   *
+   * ⚠️ چرا `ai_attempt_log` و نه `cycles.generation_tokens`: مسیر ماژولار
+   * هر روز را جدا می‌سازد و repair هم دارد؛ تنها لاگ تلاش‌ها کل مصرف را
+   * دارد. `cycles.generation_tokens` فقط خلاصهٔ یک گام است.
+   *
+   * ⚠️ در خطا `0` برمی‌گرداند: این سنجش یک محافظ است، نه شرط درستی —
+   * یک خطای موقت دیتابیس نباید تولید را کامل بخواباند.
+   */
+  async sumTokensForUserSince(userId: string, sinceIso: string): Promise<number> {
+    try {
+      const cycles = await this.db.select<{ id: string }>('cycles', {
+        user_id: `eq.${userId}`,
+        created_at: `gte.${sinceIso}`,
+        select: 'id',
+        limit: '50',
+      });
+      const ids = ((cycles as { id: string }[]) ?? []).map((row) => row.id);
+      if (ids.length === 0) return 0;
+
+      const rows = await this.db.select<{ tokens_used: number | null }>('ai_attempt_log', {
+        cycle_id: `in.(${ids.join(',')})`,
+        created_at: `gte.${sinceIso}`,
+        select: 'tokens_used',
+        limit: '2000',
+      });
+
+      return ((rows as { tokens_used: number | null }[]) ?? []).reduce(
+        (sum, row) => sum + (row.tokens_used ?? 0),
+        0
+      );
+    } catch {
+      return 0;
+    }
+  }
+
   async getTelemetryForCycle(cycleId: string): Promise<{
     event_type: string;
+    lesson_id: string | null;
     item_id: string | null;
     is_correct: boolean | null;
     response_ms: number | null;
     pause_ms: number | null;
   }[]> {
+    // ⚠️ `lesson_id` لازم است: بدون آن نمی‌توان پاسخ‌های یک روز خاص (مثلاً
+    // آزمون پنهان روز ۶) را از کل چرخه جدا کرد.
     const rows = await this.db.select<{
       event_type: string;
+      lesson_id: string | null;
       item_id: string | null;
       is_correct: boolean | null;
       response_ms: number | null;
       pause_ms: number | null;
     }>('telemetry_events', {
       cycle_id: `eq.${cycleId}`,
-      select: 'event_type,item_id,is_correct,response_ms,pause_ms',
+      select: 'event_type,lesson_id,item_id,is_correct,response_ms,pause_ms',
       limit: '5000',
     });
     return (rows as never[]) ?? [];
@@ -1375,7 +1377,10 @@ export class ContentRepository {
     try {
       const rows = asRows(
         await this.db.select<Record<string, unknown>>('content_cache', {
-          select: 'payload',
+          // ⚠️ `hits` هم خوانده می‌شود: ستون از ابتدا وجود داشت ولی هرگز
+          // افزایش نمی‌یافت، پس نمی‌شد فهمید کدام محتوا واقعاً استفاده
+          // می‌شود (برای تصمیم‌گیری دربارهٔ TTL و کیفیت پرامپت).
+          select: 'payload,hits',
           kind: `eq.${kind}`,
           cache_key: `eq.${cacheKey}`,
           limit: '1',
@@ -1383,12 +1388,15 @@ export class ContentRepository {
       );
       const row = rows[0];
       if (!row) return null;
-      // شمارندهٔ استفاده را بی‌صدا بالا ببر
+      // شمارندهٔ استفاده را بی‌صدا بالا ببر (کش اختیاری است — خطا مهم نیست)
       this.db
         .update(
           'content_cache',
           { kind: `eq.${kind}`, cache_key: `eq.${cacheKey}` },
-          { last_used_at: new Date().toISOString() }
+          {
+            hits: (Number(row.hits) || 0) + 1,
+            last_used_at: new Date().toISOString(),
+          }
         )
         .catch(() => {});
       return row.payload ?? null;
@@ -1412,6 +1420,31 @@ export class ContentRepository {
       });
     } catch {
       /* کش اختیاری است */
+    }
+  }
+
+  /**
+   * پاکسازی کش کهنه — فقط ردیف‌های **قدیمی و کم‌مصرف**.
+   *
+   * ⚠️ عمداً محافظه‌کارانه است: هر ردیف حذف‌شده یعنی تولید دوباره و
+   * هزینهٔ AI. فقط چیزی می‌رود که مدت‌ها دست‌نخورده مانده و تقریباً هیچ
+   * کسی از آن استفاده نکرده (یعنی احتمالاً بی‌کیفیت یا بی‌ربط است).
+   */
+  async pruneContentCache(olderThanDays: number, maxHits: number): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+    try {
+      const rows = await this.db.select<{ id: string }>('content_cache', {
+        last_used_at: `lt.${cutoff}`,
+        hits: `lt.${maxHits}`,
+        select: 'id',
+        limit: '500',
+      });
+      const ids = ((rows as { id: string }[]) ?? []).map((row) => row.id);
+      if (ids.length === 0) return 0;
+      await this.db.delete('content_cache', { id: `in.(${ids.join(',')})` });
+      return ids.length;
+    } catch {
+      return 0;
     }
   }
 

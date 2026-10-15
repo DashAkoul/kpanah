@@ -109,6 +109,12 @@ export default {
     if (media) {
       try {
         if (media.route === 'speak' && request.method === 'POST') {
+          // ⚠️ امنیت: این مسیر از دروازهٔ اصلی عبور نمی‌کند، پس rate-limit
+          // خودکار هم ندارد. بدون این، هر کسی می‌تواند بی‌نهایت صوت بسازد
+          // و باکس B2 را پر کند. اینجا صریحاً اعمال می‌شود (کلید = IP چون
+          // هنوز احراز هویتی انجام نشده).
+          const limited = await enforceRateLimit(request, { env, requestId });
+          if (limited) return withCors(limited, origin);
           return await handleMediaSpeak(request, { env, requestId });
         }
         if (media.route === 'file' && request.method === 'GET' && media.key) {
@@ -225,7 +231,9 @@ export default {
     try {
       if (cron === '0 * * * *') {
         const res = await runHourlyMaintenance(env);
-        console.log(`[cron:hourly] expired subscriptions: ${res.expired}`);
+        console.log(
+          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}`
+        );
       } else if (cron === '*/5 * * * *') {
         const res = await runBackgroundGeneration(env);
         console.log(

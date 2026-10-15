@@ -131,39 +131,15 @@ export const patternDrillItemSchema = z.object({
   ]).optional(),
 });
 
-export const microExerciseSchema = z
-  .object({
-    id: nonEmpty(40),
-    kind: z.enum(['FILL_BLANK', 'REORDER', 'MATCH', 'CHOOSE']),
-    prompt: nonEmpty(500),
-    options: z.array(nonEmpty(200)).min(2).max(6).optional(),
-    correctIndex: z.number().int().min(0).max(5).optional(),
-    answer: z.string().max(200).optional(),
-    explanation: z.string().max(500).optional(),
-  })
-  .refine(
-    (e) =>
-      e.kind === 'CHOOSE' || e.kind === 'MATCH'
-        ? e.options !== undefined && e.correctIndex !== undefined
-        : true,
-    { message: 'CHOOSE/MATCH exercises require options and correctIndex' }
-  );
-
+/**
+ * ⚠️ صرفه‌جویی توکن: فیلدهای `explanation`، `pattern`، `patternTranslation`
+ * و `microExercises` حذف شدند — هیچ‌کدام در UI رندر نمی‌شدند ولی هر درس
+ * ~۹۰۰ توکن برایشان خرج می‌کرد. تنها چیزی که کلاینت واقعاً نشان می‌دهد
+ * `items` است.
+ */
 export const patternDrillPartSchema = z.object({
   type: z.literal('PATTERN_DRILL'),
-  explanation: nonEmpty(1200),
-  pattern: z.string().max(300).optional(),
-  patternTranslation: z.string().max(300).optional(),
   items: z.array(patternDrillItemSchema).min(3).max(12),
-  microExercises: z.array(microExerciseSchema).max(6).optional(),
-});
-
-export const dialogueLineSchema = z.object({
-  speaker: nonEmpty(60),
-  text: nonEmpty(400),
-  translation: z.string().max(400).optional(),
-  // نسخهٔ خواندنی برای TTS (یافتهٔ ۷)
-  speakText: z.string().max(400).optional(),
 });
 
 export const applicationQuestionSchema = z
@@ -179,11 +155,14 @@ export const applicationQuestionSchema = z
     message: 'correctIndex out of range',
   });
 
+/**
+ * ⚠️ صرفه‌جویی توکن: `dialogue` (تا ۲۰ خط، گران‌ترین بخش یک درس) و
+ * `scenarioTranslation` حذف شدند — در UI نمایش داده نمی‌شدند. صحنه و
+ * سوالات باقی می‌مانند که هستهٔ ارزش آموزشی‌اند.
+ */
 export const realApplicationPartSchema = z.object({
   type: z.literal('REAL_APPLICATION'),
   scenario: nonEmpty(600),
-  scenarioTranslation: z.string().max(600).optional(),
-  dialogue: z.array(dialogueLineSchema).max(20).optional(),
   questions: z.array(applicationQuestionSchema).min(2).max(10),
 });
 

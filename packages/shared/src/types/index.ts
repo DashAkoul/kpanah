@@ -157,23 +157,13 @@ export interface PatternDrillItem {
 /** شماره خانه جعبه لایتنر */
 export type LeitnerBox = 1 | 2 | 3 | 4 | 5;
 
+/**
+ * ⚠️ صرفه‌جویی توکن: `explanation` / `pattern` / `patternTranslation` /
+ * `microExercises` حذف شدند (در UI رندر نمی‌شدند). فقط `items` می‌ماند.
+ */
 export interface PatternDrillPart {
   type: 'PATTERN_DRILL';
-  explanation: string;
-  pattern?: string;
-  patternTranslation?: string;
   items: PatternDrillItem[];
-  microExercises?: MicroExercise[];
-}
-
-export interface MicroExercise {
-  id: string;
-  kind: 'FILL_BLANK' | 'REORDER' | 'MATCH' | 'CHOOSE';
-  prompt: string;
-  options?: string[];
-  correctIndex?: number;
-  answer?: string;
-  explanation?: string;
 }
 
 export interface ApplicationQuestion {
@@ -186,20 +176,14 @@ export interface ApplicationQuestion {
   linkedTerm?: string;
 }
 
+/**
+ * ⚠️ صرفه‌جویی توکن: `dialogue` (گران‌ترین بخش درس) و
+ * `scenarioTranslation` حذف شدند — در UI نمایش داده نمی‌شدند.
+ */
 export interface RealApplicationPart {
   type: 'REAL_APPLICATION';
   scenario: string;
-  scenarioTranslation?: string;
-  dialogue?: DialogueLine[];
   questions: ApplicationQuestion[];
-}
-
-export interface DialogueLine {
-  speaker: string;
-  text: string;
-  translation?: string;
-  /** نسخهٔ «خواندنی» برای TTS (پاک‌شده از نشانه‌های نوشتاری) */
-  speakText?: string;
 }
 
 export type Part1Data = PatternDrillPart;

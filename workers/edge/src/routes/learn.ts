@@ -421,6 +421,9 @@ export async function handleCompleteLesson(
   await r.completeLesson(lessonId, { durationSeconds, status: 'COMPLETED' });
   await r.unlockNextLesson(lesson.cycle_id, lesson.day_number);
 
+  // ── 3.5 پیش‌بارگذاری روز بعد (کاربر هرگز منتظر تولید نماند) ───────
+  await prefetchNextLesson(context, user.id, lesson.cycle_id, lesson.day_number);
+
   // ── 4. پاداش و استریک ────────────────────────────────────────────
   const lessonScore = scoreLesson({
     answers: answers.map((a) => ({ isCorrect: a.isCorrect, responseMs: a.responseMs })),
@@ -503,6 +506,110 @@ export async function handleCompleteLesson(
 // Cycle generation worker (shared by inline fallback and QStash)
 // ═════════════════════════════════════════════════════════════════════
 
+/**
+ * پیش‌بارگذاری روز بعد پس از تکمیل یک روز.
+ *
+ * ⚠️ چرا: پیش از این تولید روز بعد فقط **تنبل** و لحظهٔ باز کردن آن روز
+ * انجام می‌شد → کاربر واقعاً منتظر می‌ماند. با پیش‌بارگذاری، تا وقتی
+ * کاربر روز بعد را باز کند، محتوا آماده است.
+ *
+ * ترتیب اولویت:
+ *  ۱. صف بومی (`GENERATION_QUEUE`) — زمان مستقل، مطمئن‌ترین.
+ *  ۲. `waitUntil` — بهترین تلاش. Cloudflare کارهای طولانی را لغو می‌کند
+ *     ولی این فقط **یک** درس است (~۱۰-۲۰s) و اگر لغو شود، مسیر تنبل و
+ *     کرون جبران می‌کنند.
+ */
+async function prefetchNextLesson(
+  context: RequestContext,
+  userId: string,
+  cycleId: string,
+  completedDay: number
+): Promise<void> {
+  if (completedDay >= CYCLE_LENGTH_DAYS) return; // روز ۷ = پایان چرخه
+
+  const nextDay = completedDay + 1;
+  const r = repo(context.env);
+  const cycle = await r.getCycleById(cycleId);
+  if (!cycle) return;
+
+  const queue = context.env.GENERATION_QUEUE;
+  if (queue) {
+    await queue
+      .send({
+        kind: 'generate-lesson',
+        userId,
+        cycleId,
+        cycleNumber: cycle.cycle_number,
+        dayNumber: nextDay,
+      })
+      .catch(() => undefined);
+    return;
+  }
+
+  if (!context.waitUntil) return;
+  context.waitUntil(
+    runLessonGeneration(context.env, userId, cycleId, cycle.cycle_number, nextDay).catch(
+      () => undefined
+    )
+  );
+}
+
+/**
+ * قفل کوتاه‌مدت تولید برای یک روز مشخص (کلید: `<cycleId>:<day>`).
+ *
+ * ⚠️ چرا لازم است: کرونِ هر ۵ دقیقه، consumer صف، و تولید تنبل در `home`
+ * می‌توانند همزمان همان روز را بسازند. `ensureLessonContent` کش را چک
+ * می‌کند ولی پنجرهٔ همزمانی (دو فراخوانی AI موازی پیش از نوشتن کش)
+ * باقی می‌ماند → توکن دوباره خرج می‌شود.
+ *
+ * ⚠️ KV برای این کار «کافی» است نه «کامل»: KV در نهایت سازگار است، پس
+ * ممکن است دو isolate همزمان قفل بگیرند. هدف **کاهش** تولید تکراری است،
+ * نه انحصار مطلق — به همین دلیل روی خطا اجازه می‌دهد (`true`).
+ */
+async function acquireGenerationLock(
+  env: RequestContext['env'],
+  key: string,
+  ttlSeconds = 180
+): Promise<boolean> {
+  const kv = env.CACHE_KV;
+  if (!kv) return true; // بدون KV، رفتار قبلی حفظ می‌شود
+  const full = `genlock:${key}`;
+  try {
+    if (await kv.get(full)) return false;
+    await kv.put(full, String(Date.now()), { expirationTtl: ttlSeconds });
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * سقف مصرف توکن AI هر کاربر در ۲۴ ساعت.
+ *
+ * ⚠️ چرا لازم است: `enforceRateLimit` فقط **تعداد درخواست** را می‌شمارد، نه
+ * هزینه. یک حلقهٔ باگ‌دار (یا کرون + lazy + صف که روی هم بیفتند) می‌تواند
+ * در چند ساعت کل سهمیهٔ کلید را بسوزاند بدون آنکه سقف درخواست رد شود.
+ *
+ * ⚠️ در خطای سنجش، اجازه می‌دهد (`ok: true`): محافظ است، نه شرط درستی.
+ */
+async function checkTokenBudget(
+  env: RequestContext['env'],
+  r: ContentRepository,
+  userId: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const budget = Number(env.AI_TOKEN_BUDGET_PER_DAY ?? 300_000);
+  if (!Number.isFinite(budget) || budget <= 0) return { ok: true };
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const used = await r.sumTokensForUserSince(userId, since);
+  if (used < budget) return { ok: true };
+
+  return {
+    ok: false,
+    reason: `daily AI token budget exhausted (${used}/${budget})`,
+  };
+}
+
 export async function runCycleGeneration(
   env: RequestContext['env'],
   userId: string,
@@ -537,63 +644,41 @@ export async function runCycleGeneration(
     return { ok: false, error: reason };
   }
 
+  // ── سقف هزینه: قبل از هر فراخوانی AI ────────────────────────────
+  const budget = await checkTokenBudget(env, r, userId);
+  if (!budget.ok) {
+    await markCycleFailed(r, generating.id, budget.reason);
+    return { ok: false, error: budget.reason };
+  }
+
   const generationInput = await buildGenerationInput(r, user, cycleNumber);
   if (!generationInput) {
     await markCycleFailed(r, generating.id, 'could not build generation input');
     return { ok: false, error: 'could not build generation input' };
   }
 
-  // ── تولید ماژولار (پیش‌فرض): نقشه → روز ۱ → بقیه در پس‌زمینه ─────
-  if (String(env.MODULAR_GENERATION ?? 'true') !== 'false') {
-    let mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
-      firstOnly: opts.firstOnly,
-    });
-
-    // ── تلاش دوم (فقط وقتی در پس‌زمینه هستیم) ──────────────────────
-    // ⚠️ چرا دیگر به «تولید کامل ۷ روزه» (generateCycle) برنمی‌گردیم:
-    // آن مسیر همهٔ ۷ درس را در **یک** پاسخ می‌خواهد و سقف واقعی
-    // providerها ۸۱۹۲ توکن است → پاسخ همیشه بریده می‌شود و schema
-    // validation می‌شکند. یعنی fallback عملاً هرگز موفق نمی‌شد، فقط
-    // خطای دوم به خطای اول اضافه می‌کرد و سهمیهٔ AI را دو برابر
-    // می‌سوزاند. به‌جای آن یک بار دیگر مسیر ماژولار را امتحان می‌کنیم
-    // (شاید مشکل گذرا بوده باشد).
-    if (!mod.ok && !opts.firstOnly) {
-      console.warn(`[modular] retry once: ${mod.error}`);
-      await new Promise((res) => setTimeout(res, 2_000));
-      mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
-        firstOnly: opts.firstOnly,
-      });
-    }
-
-    if (mod.ok) return { ok: true };
-
-    await markCycleFailed(r, generating.id, mod.error ?? 'modular generation failed');
-    return { ok: false, error: mod.error ?? 'modular generation failed' };
-  }
-
-  // ── مسیر قدیمی (فقط اگر MODULAR_GENERATION=false باشد) ───────────
-  const result = await engine.generateCycle(generationInput);
-
-  // Record every attempt against the provider pool so the panel can show
-  // real health data and the operator can see the failover happen.
-  await recordAttempts(r, generating.id, result.attempts);
-
-  if (!result.cycle) {
-    const detail = result.attempts
-      .map((a) => `${a.provider}/${a.model}: ${a.error ?? 'failed'}`)
-      .join(' | ');
-    await markCycleFailed(r, generating.id, detail);
-    return { ok: false, error: detail };
-  }
-
-  await r.persistGeneratedCycle(generating.id, result.cycle, {
-    model: result.model ?? 'unknown',
-    ms: result.totalMs,
-    tokens: result.attempts.find((a) => a.ok)?.tokensUsed,
-    input: generationInput,
+  // ── تولید ماژولار: نقشه → روز ۱ → بقیه در پس‌زمینه ─────────────
+  // ⚠️ مسیر legacy «کل چرخهٔ ۷ درسی در یک پاسخ» **حذف شد**: با سقف واقعی
+  // providerها (۸۱۹۲ توکن) پاسخ همیشه بریده می‌شد و schema validation
+  // می‌شکست — یعنی هرگز موفق نمی‌شد و فقط سهمیهٔ AI را دو برابر می‌سوزاند.
+  let mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
+    firstOnly: opts.firstOnly,
   });
 
-  return { ok: true };
+  // ── تلاش دوم (فقط در پس‌زمینه) ─────────────────────────────────
+  // ارزان‌تر از برگشتن به مسیر legacy؛ شاید مشکل گذرا بوده باشد.
+  if (!mod.ok && !opts.firstOnly) {
+    console.warn(`[modular] retry once: ${mod.error}`);
+    await new Promise((res) => setTimeout(res, 2_000));
+    mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
+      firstOnly: opts.firstOnly,
+    });
+  }
+
+  if (mod.ok) return { ok: true };
+
+  await markCycleFailed(r, generating.id, mod.error ?? 'modular generation failed');
+  return { ok: false, error: mod.error ?? 'modular generation failed' };
 }
 
 /**
@@ -611,6 +696,7 @@ async function recordAttempts(
     model: string;
     ok: boolean;
     ms: number;
+    phase: 'initial' | 'repair';
     error?: string;
     tokensUsed?: number;
   }[]
@@ -632,7 +718,7 @@ async function recordAttempts(
         providerLabel: a.provider,
         model: a.model,
         attemptNo: i + 1,
-        phase: 'initial',
+        phase: a.phase,
         ok: a.ok,
         latencyMs: a.ms,
         error: a.error,
@@ -661,10 +747,15 @@ async function buildGenerationInput(
   const telemetry = previous ? await r.getTelemetryForCycle(previous.id) : [];
   const lexical = await r.getLexicalItems(user.id, user.target_language);
 
+  // ⚠️ باگ رفع‌شده: پیش از این فقط «وجود» درس روز ۶ چک می‌شد و فیلتر روی
+  // **کل چرخه** اعمال می‌شد — یعنی «امتیاز آزمون پنهان» در واقع میانگین دقت
+  // هر ۷ روز بود و به AI سیگنال غلط می‌داد. حالا فقط پاسخ‌های همان درس.
   const day6 = previousLessons.find((l) => l.day_number === 6);
   let hiddenScore: number | null = null;
   if (day6) {
-    const day6Answers = telemetry.filter((t) => t.event_type === 'ANSWER');
+    const day6Answers = telemetry.filter(
+      (t) => t.event_type === 'ANSWER' && t.lesson_id === day6.id
+    );
     if (day6Answers.length > 0) {
       const correct = day6Answers.filter((a) => a.is_correct).length;
       hiddenScore = Math.round((correct / day6Answers.length) * 100);
@@ -714,6 +805,19 @@ async function buildGenerationInput(
  * و بهینه‌سازی جدید هرگز به کاربر نمی‌رسد.
  */
 const CACHE_CONTENT_VERSION = 3;
+
+/**
+ * نسخهٔ «شکل» محتوای **درس** (جدا از outline).
+ *
+ * ⚠️ چرا دو شمارنده: outline و درس مستقل تکامل می‌یابند. تغییر پرامپت درس
+ * نباید outlineهای سالم را باطل کند (و برعکس) — هر باطل‌سازی یعنی تولید
+ * دوباره و هزینهٔ AI.
+ * ⚠️ پیش از این کلید کش درس **هیچ نسخه‌ای نداشت** → با بالا بردن
+ * `CACHE_CONTENT_VERSION` فقط outline باطل می‌شد و درس‌های کهنه می‌ماندند
+ * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
+ * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
+ */
+const LESSON_CONTENT_VERSION = 2;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -858,7 +962,7 @@ async function ensureLessonContent(
   outline: CycleOutline,
   variant: number
 ): Promise<GeneratedLesson | null> {
-  const key = cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant);
+  const key = `${cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant)}:c${LESSON_CONTENT_VERSION}`;
   const cached = (await r.getCachedContent('LESSON', key)) as GeneratedLesson | null;
   if (cached) return cached;
 
@@ -881,6 +985,13 @@ async function generateLessonJob(
   day: OutlineDay,
   variant: number
 ): Promise<boolean> {
+  // ⚠️ اگر isolate دیگری همین حالا مشغول همین روز است، دوباره AI نزن.
+  // `true` برمی‌گردانیم چون کار در حال انجام است، نه شکست‌خورده — وگرنه
+  // صف/کرون بی‌دلیل retry می‌کند.
+  if (!(await acquireGenerationLock(env, `${cycleId}:${day.dayNumber}`))) {
+    return true;
+  }
+
   const lesson = await ensureLessonContent(r, engine, cycleId, input, day, outline, variant);
   if (!lesson) return false;
   // روزهای بعدی LOCKED می‌مانند؛ منطق باز شدن روزها جداست
@@ -941,6 +1052,10 @@ export async function runLessonGeneration(
 
   const day = outline.days.find((d) => d.dayNumber === dayNumber);
   if (!day) return { ok: false, error: 'day not in outline' };
+
+  // ── سقف هزینه: قبل از هر فراخوانی AI ────────────────────────────
+  const budget = await checkTokenBudget(env, r, userId);
+  if (!budget.ok) return { ok: false, error: budget.reason };
 
   const input = await buildGenerationInput(r, user, cycleNumber);
   if (!input) return { ok: false, error: 'could not build generation input' };

@@ -49,15 +49,15 @@ export interface AiAttempt {
   model: string;
   ok: boolean;
   ms: number;
+  /**
+   * ⚠️ `initial` = فراخوانی اول، `repair` = تلاش دوباره پس از خطای
+   * اعتبارسنجی. پیش از این همهٔ ردیف‌های `ai_attempt_log` با `phase:
+   * 'initial'` ثبت می‌شدند و تحلیل «چند درصد خطاها با repair حل شد»
+   * غیرممکن بود.
+   */
+  phase: 'initial' | 'repair';
   error?: string;
   tokensUsed?: number;
-}
-
-export interface GenerateCycleResult {
-  cycle: GeneratedCycle | null;
-  attempts: AiAttempt[];
-  model: string | null;
-  totalMs: number;
 }
 
 /** One row of `ai_providers`, already decrypted and ready to call. */
@@ -107,66 +107,6 @@ export class AiEngine {
   /** Provider labels in the order they will be tried, for logging. */
   get providerChain(): string[] {
     return this.providers.map((p) => `${p.label} (${p.model})`);
-  }
-
-  // ───────────────────────────────────────────────────────────────────
-  // Public: generate a full 7-day cycle
-  // ───────────────────────────────────────────────────────────────────
-
-  async generateCycle(input: CycleGenerationInput): Promise<GenerateCycleResult> {
-    const started = Date.now();
-    const attempts: AiAttempt[] = [];
-
-    const systemPrompt = buildSystemPrompt(input);
-    const userPrompt = buildUserPrompt(input);
-    const jsonSchema = buildJsonSchema();
-
-    // ⚠️ سقف زمانی: این تابع ممکن است داخل یک درخواست کاربر اجرا شود.
-    // بدون این سقف، با چند provider خراب، درخواست دقیقه‌ها معلق می‌ماند.
-    const deadlineMs = 60_000;
-
-    for (const provider of this.providers) {
-      if (Date.now() - started > deadlineMs) break;
-
-      // ⚠️ سقف توکن برای مسیر قدیمی (کل ۷ درس در یک پاسخ): از مقدار
-      // تنظیم‌شدهٔ provider در پنل ادمین بزرگ‌تر نمی‌رویم (وگرنه مدل‌هایی
-      // مثل `gemini-3.5-flash-lite` با سقف ۸۱۹۲ خطای ۴۰۰ «invalid
-      // argument» می‌دهند). فقط وقتی کسی مقداری ست نکرده، ۱۶k پیش‌فرض.
-      const maxOutputTokens = Math.min(32_768, provider.maxOutputTokens ?? 16_384);
-
-      // ── Attempt 1 ────────────────────────────────────────────────
-      const first = await this.attempt(
-        provider, systemPrompt, userPrompt, jsonSchema, 'initial', maxOutputTokens
-      );
-      attempts.push(first.attempt);
-      if (first.cycle) {
-        return {
-          cycle: first.cycle,
-          attempts,
-          model: `${provider.vendor}:${provider.model}`,
-          totalMs: Date.now() - started,
-        };
-      }
-
-      if (Date.now() - started > deadlineMs) break;
-
-      // ── Attempt 2: repair round-trip with exact errors ───────────
-      const repairPrompt = buildRepairPrompt(userPrompt, first.errors ?? []);
-      const second = await this.attempt(
-        provider, systemPrompt, repairPrompt, jsonSchema, 'repair', maxOutputTokens
-      );
-      attempts.push(second.attempt);
-      if (second.cycle) {
-        return {
-          cycle: second.cycle,
-          attempts,
-          model: `${provider.vendor}:${provider.model}:repaired`,
-          totalMs: Date.now() - started,
-        };
-      }
-    }
-
-    return { cycle: null, attempts, model: null, totalMs: Date.now() - started };
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -256,7 +196,7 @@ export class AiEngine {
       if (Date.now() - started > deadlineMs) break;
 
       const first = await this.attemptFor(
-        provider, schema, systemPrompt, userPrompt, schemaForProvider
+        provider, schema, systemPrompt, userPrompt, schemaForProvider, 'initial'
       );
       attempts.push(first.attempt);
       if (first.value !== null) {
@@ -272,7 +212,7 @@ export class AiEngine {
 
       const repair = buildRepairPrompt(userPrompt, first.errors ?? []);
       const second = await this.attemptFor(
-        provider, schema, systemPrompt, repair, schemaForProvider
+        provider, schema, systemPrompt, repair, schemaForProvider, 'repair'
       );
       attempts.push(second.attempt);
       if (second.value !== null) {
@@ -294,10 +234,16 @@ export class AiEngine {
     schema: z.ZodType<T>,
     systemPrompt: string,
     userPrompt: string,
-    jsonSchema: unknown
+    jsonSchema: unknown,
+    phase: 'initial' | 'repair'
   ): Promise<{ value: T | null; errors?: string[]; attempt: AiAttempt }> {
     const t0 = Date.now();
-    const base = { provider: provider.label, providerId: provider.id, model: provider.model };
+    const base = {
+      provider: provider.label,
+      providerId: provider.id,
+      model: provider.model,
+      phase,
+    };
 
     try {
       const { text, tokensUsed } = await this.callProvider(
@@ -338,74 +284,6 @@ export class AiEngine {
         value: null,
         errors: [`Provider error: ${message}`],
         attempt: { ...base, ok: false, ms: Date.now() - t0, error: message.slice(0, 200) },
-      };
-    }
-  }
-
-  // ───────────────────────────────────────────────────────────────────
-  // Single provider attempt + validation
-  // ───────────────────────────────────────────────────────────────────
-
-  private async attempt(
-    provider: ResolvedProvider,
-    systemPrompt: string,
-    userPrompt: string,
-    jsonSchema: unknown,
-    phase: 'initial' | 'repair',
-    maxOutputTokens?: number
-  ): Promise<{ cycle: GeneratedCycle | null; errors?: string[]; attempt: AiAttempt }> {
-    const t0 = Date.now();
-    const base = {
-      provider: provider.label,
-      providerId: provider.id,
-      model: provider.model,
-    };
-
-    try {
-      const { text, tokensUsed } = await this.callProvider(
-        provider,
-        systemPrompt,
-        userPrompt,
-        jsonSchema,
-        maxOutputTokens
-      );
-
-      const parsed = extractJson(text);
-      if (parsed === null) {
-        return {
-          cycle: null,
-          errors: ['Response was not valid JSON. Return ONLY the JSON object.'],
-          attempt: {
-            ...base, ok: false, ms: Date.now() - t0, error: 'invalid_json', tokensUsed,
-          },
-        };
-      }
-
-      const validation = validateWithDetail(generatedCycleSchema, parsed);
-      if (!validation.success) {
-        return {
-          cycle: null,
-          errors: validation.errors,
-          attempt: {
-            ...base, ok: false, ms: Date.now() - t0,
-            error: `schema: ${validation.errors?.[0] ?? ''}`.slice(0, 200),
-            tokensUsed,
-          },
-        };
-      }
-
-      return {
-        cycle: enforceSchedule(validation.data!),
-        attempt: { ...base, ok: true, ms: Date.now() - t0, tokensUsed },
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return {
-        cycle: null,
-        errors: [`Provider error: ${message}`],
-        attempt: {
-          ...base, ok: false, ms: Date.now() - t0, error: message.slice(0, 200),
-        },
       };
     }
   }
@@ -784,106 +662,6 @@ function pronunciationRule(target: string): string {
   return `"pronunciation" is OPTIONAL and usually useless for ${target} — prefer to omit it unless the term is genuinely non-obvious to read aloud.`;
 }
 
-function buildSystemPrompt(input: CycleGenerationInput): string {
-  const uiLang = input.user.uiLanguage;
-  const target = input.user.targetLanguage;
-
-  return [
-    `You are an expert adaptive language tutor building a 7-day micro-cycle.`,
-    `Learner's native/UI language: ${uiLang}. Language being taught: ${target}.`,
-    `Skill level: ${input.user.skillLevel}. Goal: ${input.user.learningGoal ?? 'general fluency'}.`,
-    ``,
-    `PEDAGOGY — follow exactly:`,
-    `- Days 1-5 are TEACHING. Part 1 = pattern-first induction using Substitution Drills.`,
-    `  NEVER state grammar rules as formulas. Instead give a base sentence and interchangeable`,
-    `  slots so the learner induces the pattern themselves.`,
-    `  Part 2 = REAL_APPLICATION: the same pattern in a concrete real-world scenario.`,
-    `- Day 6 is HIDDEN_ASSESSMENT. It MUST look and feel like a normal teaching day.`,
-    `  Do NOT mention testing, exams, scores, or evaluation anywhere in user-visible text.`,
-    `  Assess what days 1-5 taught using fresh contexts.`,
-    `- Day 7 is CONSOLIDATION. Revisit ONLY the learner's weak terms with NEW examples`,
-    `  (never repeat the original example sentence). End with encouragement.`,
-    ``,
-    `SPACED REPETITION:`,
-    `- The learner has a 5-box Leitner system. Prioritise terms with box 1-2 or high lapse counts.`,
-    `- Terms with box 5 are mastered: use them as scaffolding, do not re-teach them.`,
-    ``,
-    `LANGUAGE RULES:`,
-    `- "meaning", "explanation", "scenario", "prompt" and translations are written in ${uiLang}.`,
-    `- "term", "example", "options" content to be learned is in ${target}.`,
-    `- "title" is in ${target}; "titleUi" is the same idea rendered in ${uiLang}.`,
-    `- ${pronunciationRule(target)}`,
-    `- "speakText" is a clean, speakable version of the item for a text-to-speech`,
-    `  engine: strip parentheses, slashes, ellipses and bracketed notes. Write it`,
-    `  exactly as a native speaker would say it aloud.`,
-    ``,
-    `CALIBRATION:`,
-    `- accuracy ${input.delta.accuracyPct}%, avg response ${input.delta.averageResponseMs}ms.`,
-    `- If accuracy < 60%: smaller vocabulary per day, more repetition, shorter sentences.`,
-    `- If accuracy > 90% and responses are fast: push complexity up a notch.`,
-    ``,
-    `Output ONE JSON object matching the provided schema. No markdown, no commentary.`,
-    ``,
-    `EXAMPLE of the required shape (copy the STRUCTURE only, never the content):`,
-    `{"title":"...","titleUi":"...","focusSummary":"...","lessons":[{"dayNumber":1,"title":"...",`,
-    `"titleUi":"...","kind":"TEACHING","part1":{"type":"PATTERN_DRILL","explanation":"...",`,
-    `"pattern":"...","items":[{"term":"...","meaning":"...","example":"...","speakText":"...",`,
-    `"substitution":{"base":"I would like ___","slots":["a coffee","water"]}}]},`,
-    `"part2":{"type":"REAL_APPLICATION","scenario":"...","questions":[{"id":"q1","prompt":"...",`,
-    `"options":["...","..."],"correctIndex":0,"explanation":"...","linkedTerm":"..."}]}}]}`,
-  ].join('\n');
-}
-
-function buildUserPrompt(input: CycleGenerationInput): string {
-  const d = input.delta;
-  const lines: string[] = [];
-
-  lines.push(`Build cycle #${input.cycleNumber} for this learner.`);
-  lines.push('');
-  lines.push(`PERFORMANCE SNAPSHOT:`);
-  lines.push(`- answers: ${d.totalAnswers}, accuracy: ${d.accuracyPct}%`);
-  lines.push(`- avg response time: ${d.averageResponseMs}ms, longest pause: ${d.maxPauseMs}ms`);
-  lines.push(`- pace: ${d.paceAnswersPerMinute} answers/min`);
-  if (d.hiddenAssessmentScore !== null) {
-    lines.push(`- day-6 assessment result: ${d.hiddenAssessmentScore}%`);
-  }
-
-  if (d.weakTerms.length > 0) {
-    lines.push('');
-    lines.push(`WEAK TERMS — must appear in days 1-5 AND again in day 7 with new examples:`);
-    for (const w of d.weakTerms.slice(0, 25)) {
-      lines.push(`  • ${w.term} (box ${w.box}, ${w.lapses} lapses, fail rate ${Math.round(w.failRate * 100)}%)`);
-    }
-  }
-
-  if (d.masteredTerms.length > 0) {
-    lines.push('');
-    lines.push(`MASTERED (scaffold only, do not re-teach): ${d.masteredTerms.slice(0, 30).join(', ')}`);
-  }
-
-  if (d.weakestAreas.length > 0) {
-    lines.push('');
-    lines.push(`WEAKEST AREAS — allocate most time here: ${d.weakestAreas.join(', ')}`);
-  }
-  if (d.strongestAreas.length > 0) {
-    lines.push(`STRONGEST AREAS — can move faster: ${d.strongestAreas.join(', ')}`);
-  }
-
-  if (input.previousCycleSummary) {
-    lines.push('');
-    lines.push(`PREVIOUS CYCLE (do not duplicate its content or scenario):`);
-    lines.push(input.previousCycleSummary);
-  }
-
-  lines.push('');
-  lines.push(`Produce exactly 7 lessons: dayNumber 1..7, kind per the pedagogy rules,`);
-  lines.push(`each with part1 (PATTERN_DRILL, 3-8 items) and part2 (REAL_APPLICATION, 2-6 questions).`);
-  lines.push(`Each lesson needs "title" (target language) and "titleUi" (learner UI language).`);
-  lines.push(`Every drill item needs "speakText" — the speakable form of its example sentence.`);
-
-  return lines.join('\n');
-}
-
 /**
  * پرامپت «تعمیر» — یافتهٔ ۵ بازبینی.
  *
@@ -910,7 +688,7 @@ function buildRepairPrompt(originalPrompt: string, errors: string[]): string {
     '- required keys: dayNumber, title, titleUi, kind, part1, part2',
     '- part1.type = "PATTERN_DRILL", part2.type = "REAL_APPLICATION"',
     '- part2.questions: 2-6 items, correctIndex must be < options.length',
-    '- every drill item and dialogue line needs "speakText"',
+    '- every drill item needs "speakText"',
     '',
     'Return ONLY the corrected JSON object. Nothing else.',
   ].join('\n');
@@ -944,7 +722,7 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `- ${pronunciationRule(input.user.targetLanguage)}`,
     `- "speakText" is a clean, speakable version for a text-to-speech engine: strip`,
     `  parentheses, slashes, ellipses and bracketed notes. Write it exactly as a native`,
-    `  speaker would say it aloud. REQUIRED on every drill item and dialogue line.`,
+    `  speaker would say it aloud. REQUIRED on every drill item.`,
   ].join('\n');
 }
 
@@ -1017,11 +795,10 @@ function buildLessonSystemPrompt(input: CycleGenerationInput): string {
     ``,
     `EXAMPLE of the required shape (copy the STRUCTURE only, never the content):`,
     `{"dayNumber":3,"title":"...","titleUi":"...","kind":"TEACHING",`,
-    `"part1":{"type":"PATTERN_DRILL","explanation":"...","pattern":"...",`,
+    `"part1":{"type":"PATTERN_DRILL",`,
     `"items":[{"term":"...","meaning":"...","example":"...","speakText":"...",`,
     `"substitution":{"base":"I would like ___","slots":["a coffee","water"]}}]},`,
-    `"part2":{"type":"REAL_APPLICATION","scenario":"...","dialogue":[{"speaker":"A","text":"...",`,
-    `"translation":"...","speakText":"..."}],"questions":[{"id":"q1","prompt":"...",`,
+    `"part2":{"type":"REAL_APPLICATION","scenario":"...","questions":[{"id":"q1","prompt":"...",`,
     `"options":["...","..."],"correctIndex":0,"explanation":"...","linkedTerm":"..."}]}}`,
   ].join('\n');
 }
@@ -1054,12 +831,15 @@ function buildLessonUserPrompt(
     `Rules for this day:`,
     `- part1: PATTERN_DRILL (term, meaning, pronunciation, example, exampleTranslation, speakText, substitution).`,
     `- every drill item MUST have "speakText" (speakable form, no punctuation noise).`,
+    `- Do NOT produce an "explanation", "pattern", "patternTranslation", "dialogue",`,
+    `  "scenarioTranslation" or "microExercises" key — they are not part of the schema.`,
+    `- If WEAK TERMS were listed above, they are the PREFERRED SOURCE for the REVIEW`,
+    `  share of this day — never for the BRAND NEW share. The budget above wins.`,
     day.kind === 'CONSOLIDATION'
       ? `- This is CONSOLIDATION: reuse ONLY weak terms with NEW example sentences; never repeat an old example.`
       : day.kind === 'HIDDEN_ASSESSMENT'
         ? `- This is HIDDEN_ASSESSMENT but must look like a normal teaching day. Never mention tests/scores.`
         : `- part2: REAL_APPLICATION with 2-6 questions in a concrete scenario.`,
-    `- part2 dialogue lines must have "speakText" too.`,
     `- dayNumber MUST be ${day.dayNumber}, kind MUST be ${day.kind}.`,
     `- title/titleUi should match the outline: "${day.title}".`,
   ].join('\n');
@@ -1068,144 +848,98 @@ function buildLessonUserPrompt(
 // ═════════════════════════════════════════════════════════════════════
 // Gemini responseSchema (OpenAPI 3.0 subset)
 //
-// ⚠️ سه اسکیمای جدا وجود دارد: کل چرخه / یک درس / طرح کلی (outline).
-// هر تسک باید اسکیمای خودش را بگیرد — نه اسکیمای چرخهٔ کامل. جزئیات در
-// docstring مربوط به `runChain`.
+// ⚠️ دو اسکیمای جدا: یک درس / طرح کلی (outline). هر تسک اسکیمای خودش را
+// می‌گیرد. مسیر legacy «کل چرخهٔ ۷ درسی» حذف شد (با سقف ۸۱۹۲ توکن
+// همیشه می‌شکست و فقط سهمیهٔ AI را می‌سوزاند).
 // ═════════════════════════════════════════════════════════════════════
 
 const KIND_ENUM = ['TEACHING', 'HIDDEN_ASSESSMENT', 'CONSOLIDATION'];
 
-function buildJsonSchema(): Record<string, unknown> {
-  const str = (description?: string) => ({ type: 'string', ...(description ? { description } : {}) });
+/** رشتهٔ اسکیما با توضیح اختیاری */
+function jsonStr(description?: string): Record<string, unknown> {
+  return { type: 'string', ...(description ? { description } : {}) };
+}
 
-  const patternDrillItem = {
+/** اسکیمای یک آیتم واژه */
+function patternDrillItemJson(): Record<string, unknown> {
+  return {
     type: 'object',
     properties: {
-      term: str('The target-language word or phrase'),
-      meaning: str('Meaning in the learner UI language'),
-      pronunciation: str('Optional romanisation'),
-      example: str('Example sentence in the target language'),
-      exampleTranslation: str('Translation into the learner UI language'),
+      term: jsonStr('The target-language word or phrase'),
+      meaning: jsonStr('Meaning in the learner UI language'),
+      pronunciation: jsonStr('Optional romanisation'),
+      example: jsonStr('Example sentence in the target language'),
+      exampleTranslation: jsonStr('Translation into the learner UI language'),
+      speakText: jsonStr('Clean speakable form of the example, for TTS'),
       substitution: {
         type: 'object',
         properties: {
-          base: str('Base sentence with a slot'),
-          slots: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 },
+          base: jsonStr('Base sentence with a slot'),
+          slots: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
         },
         required: ['base', 'slots'],
       },
     },
     required: ['term', 'meaning', 'example'],
   };
+}
 
-  const patternDrillPart = {
-    type: 'object',
-    properties: {
-      type: { type: 'string', enum: ['PATTERN_DRILL'] },
-      explanation: str('Inductive explanation in the UI language — no grammar formulas'),
-      pattern: str('Optional pattern template'),
-      patternTranslation: str(),
-      items: { type: 'array', items: patternDrillItem, minItems: 3, maxItems: 12 },
-      microExercises: {
-        type: 'array',
-        minItems: 0,
-        maxItems: 6,
-        items: {
-          type: 'object',
-          properties: {
-            id: str(),
-            kind: { type: 'string', enum: ['FILL_BLANK', 'REORDER', 'MATCH', 'CHOOSE'] },
-            prompt: str(),
-            options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 6 },
-            correctIndex: { type: 'integer', minimum: 0, maximum: 5 },
-            answer: str(),
-            explanation: str(),
-          },
-          required: ['id', 'kind', 'prompt'],
-        },
-      },
-    },
-    required: ['type', 'explanation', 'items'],
-  };
-
-  const realApplicationPart = {
-    type: 'object',
-    properties: {
-      type: { type: 'string', enum: ['REAL_APPLICATION'] },
-      scenario: str('Real-world scenario in the UI language'),
-      scenarioTranslation: str(),
-      dialogue: {
-        type: 'array',
-        minItems: 0,
-        maxItems: 20,
-        items: {
-          type: 'object',
-          properties: { speaker: str(), text: str(), translation: str() },
-          required: ['speaker', 'text'],
-        },
-      },
-      questions: {
-        type: 'array',
-        minItems: 2,
-        maxItems: 10,
-        items: {
-          type: 'object',
-          properties: {
-            id: str(),
-            prompt: str(),
-            options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 5 },
-            correctIndex: { type: 'integer', minimum: 0, maximum: 4 },
-            explanation: str(),
-            linkedTerm: str('Term to record in the Leitner box'),
-          },
-          required: ['id', 'prompt', 'options', 'correctIndex'],
-        },
-      },
-    },
-    required: ['type', 'scenario', 'questions'],
-  };
-
-  const lesson = {
-    type: 'object',
-    properties: {
-      dayNumber: { type: 'integer', minimum: 1, maximum: 7 },
-      title: str('Target-language title'),
-      titleUi: str('Title in the learner UI language'),
-      kind: { type: 'string', enum: KIND_ENUM },
-      part1: patternDrillPart,
-      part2: realApplicationPart,
-    },
-    required: ['dayNumber', 'title', 'titleUi', 'kind', 'part1', 'part2'],
-  };
-
+/** اسکیمای یک سوال کاربرد واقعی */
+function applicationQuestionJson(): Record<string, unknown> {
   return {
     type: 'object',
     properties: {
-      title: str('Cycle title in the target language'),
-      titleUi: str('Cycle title in the learner UI language'),
-      focusSummary: str('One-paragraph summary in the UI language'),
-      lessons: { type: 'array', items: lesson, minItems: 7, maxItems: 7 },
+      id: jsonStr(),
+      prompt: jsonStr(),
+      options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 5 },
+      correctIndex: { type: 'integer', minimum: 0, maximum: 4 },
+      explanation: jsonStr(),
+      linkedTerm: jsonStr('Term to record in the Leitner box'),
     },
-    required: ['title', 'titleUi', 'focusSummary', 'lessons'],
+    required: ['id', 'prompt', 'options', 'correctIndex'],
   };
 }
 
 /**
  * اسکیمای یک درس تنها — برای فراخوانی ماژولار (تولید روز به روز).
- * ⚠️ از segments مشترک بالا استفاده می‌کند تا شکل درس در هر دو مسیر یکی باشد.
+ *
+ * ⚠️ مستقل ساخته می‌شود (نه استخراج‌شده از اسکیمای چرخه) تا با حذف مسیر
+ * legacy، اسکیمای چرخه کاملاً از کد برود. باگ قبلی `properties =
+ * lessonItem` (به‌جای `lessonItem.properties`) هم دیگر قابل تکرار نیست.
  */
 function buildLessonJsonSchema(): Record<string, unknown> {
-  const cycleShape = buildJsonSchema();
-  const lessonShape = (cycleShape.properties as Record<string, { items?: unknown }>).lessons;
-  // ⚠️ باگ رفع‌شده: پیش از این `properties` برابر **خودِ شیء درس** گذاشته
-  // می‌شد (شامل کلیدهای `type`/`properties`/`required`)، نه خواص درس. نتیجه
-  // یک اسکیمای نامعتبر برای Gemini بود → ۴۰۰ «invalid argument» یا پاسخ
-  // بی‌شکل. درست: خواصِ آیتمِ آرایهٔ lessons (`items.properties`).
-  const lessonItem = (lessonShape as { items: { properties: Record<string, unknown> } }).items;
   return {
     type: 'object',
-    properties: lessonItem.properties,
-  } as Record<string, unknown>;
+    properties: {
+      dayNumber: { type: 'integer', minimum: 1, maximum: 7 },
+      title: jsonStr('Target-language title'),
+      titleUi: jsonStr('Title in the learner UI language'),
+      kind: { type: 'string', enum: KIND_ENUM },
+      part1: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['PATTERN_DRILL'] },
+          items: { type: 'array', items: patternDrillItemJson(), minItems: 3, maxItems: 12 },
+        },
+        required: ['type', 'items'],
+      },
+      part2: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['REAL_APPLICATION'] },
+          scenario: jsonStr('Real-world scenario in the UI language'),
+          questions: {
+            type: 'array',
+            items: applicationQuestionJson(),
+            minItems: 2,
+            maxItems: 10,
+          },
+        },
+        required: ['type', 'scenario', 'questions'],
+      },
+    },
+    required: ['dayNumber', 'title', 'titleUi', 'kind', 'part1', 'part2'],
+  };
 }
 
 /**
@@ -1280,13 +1014,12 @@ function compactSchema(node: unknown): string {
  * انتخاب اسکیمای درست بر اساس برچسب تسک.
  *
  * برچسب‌ها از `generateOutline` (`outline`) و `generateLesson`
- * (`lesson-<n>`) می‌آیند. هر چه ناشناخته بود → اسکیمای چرخهٔ کامل،
- * چون تنها مسیری که واقعاً کل چرخه می‌خواهد مسیر legacy است.
+ * (`lesson-<n>`) می‌آیند. هر برچسب ناشناخته → اسکیمای درس (محافظه‌کارانه‌ترین
+ * گزینه؛ دیگر مسیر «کل چرخه» وجود ندارد).
  */
 export function jsonSchemaFor(tag: string): unknown {
   if (tag === 'outline') return buildOutlineJsonSchema();
-  if (tag.startsWith('lesson-')) return buildLessonJsonSchema();
-  return buildJsonSchema();
+  return buildLessonJsonSchema();
 }
 
 /**

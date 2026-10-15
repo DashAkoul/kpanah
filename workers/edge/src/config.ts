@@ -13,6 +13,12 @@ export const DEFAULT_ENV: Partial<Env> = {
   RATE_LIMIT_PER_DAY: '2000',
   FREE_TRIAL_DAYS: '7',
   CYCLE_STALL_DAYS: '12',
+  /**
+   * سقف مصرف توکن AI هر کاربر در ۲۴ ساعت (محافظت از کلید در برابر حلقهٔ
+   * باگ‌دار). یک چرخهٔ کامل ~۸ فراخوانی و چند ده هزار توکن است، پس ۳۰۰k
+   * حدود ۴ برابر مصرف عادی جا دارد و فقط جلوی فاجعه را می‌گیرد.
+   */
+  AI_TOKEN_BUDGET_PER_DAY: '300000',
   GATE_PATH: '/kpanah56/8fjg7rfb/v1/gate',
 };
 

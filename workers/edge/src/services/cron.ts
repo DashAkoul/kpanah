@@ -26,13 +26,22 @@ function repo(env: Env): ContentRepository {
 // ۱. ساعتی — انقضای اشتراک‌ها  (cron: 0 * * * *)
 // ═════════════════════════════════════════════════════════════════════
 
-export async function runHourlyMaintenance(env: Env): Promise<{ expired: number }> {
+export async function runHourlyMaintenance(
+  env: Env
+): Promise<{ expired: number; prunedCache: number }> {
   const r = repo(env);
   const overdue = await r.listOverdueSubscriptions(200);
   if (overdue.length > 0) {
     await r.expireSubscriptions(overdue.map((s) => s.id));
   }
-  return { expired: overdue.length };
+
+  // ── پاکسازی کش کهنه ──────────────────────────────────────────────
+  // ⚠️ محافظه‌کارانه: فقط ردیف‌هایی که ۱۸۰ روز دست‌نخورده مانده‌اند و
+  // کمتر از ۲ بار استفاده شده‌اند. هر حذف = تولید دوباره = هزینهٔ AI،
+  // پس این کار فقط «آشغال» را می‌برد، نه محتوای مفید.
+  const prunedCache = await r.pruneContentCache(180, 2);
+
+  return { expired: overdue.length, prunedCache };
 }
 
 // ═════════════════════════════════════════════════════════════════════

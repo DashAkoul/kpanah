@@ -5,8 +5,8 @@ import { haptic } from '../../lib/telegram';
 export type TabKey = 'learn' | 'profile' | 'settings';
 
 const TABS: { key: TabKey; icon: string }[] = [
-  { key: 'learn', icon: '🎓' },
   { key: 'profile', icon: '👤' },
+  { key: 'learn', icon: '🎓' },
   { key: 'settings', icon: '⚙️' },
 ];
 
@@ -24,7 +24,7 @@ export function BottomNav({
   const { t } = useTranslation();
 
   return (
-    <nav className="safe-bottom sticky bottom-0 z-30 border-t border-border bg-bg/95 backdrop-blur">
+    <nav className="safe-bottom sticky bottom-0 z-30 glass-nav border-t border-border">
       <div className="flex items-stretch">
         {TABS.map(({ key, icon }) => {
           const isActive = active === key;

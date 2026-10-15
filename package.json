@@ -16,6 +16,7 @@
     "build:tma": "npm run build -w @kpanah/tma",
     "build:edge": "npm run build -w @kpanah/edge",
     "deploy:ghpages": "REPO=DashAkoul/kpanah bash scripts/deploy-github-pages.sh",
+    "deploy:app": "bash scripts/deploy-frontend-worker.sh",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "db:reset": "supabase db reset",

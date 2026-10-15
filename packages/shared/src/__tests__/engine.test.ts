@@ -11,6 +11,7 @@ import {
   daysRemaining,
   lessonKindForDay,
 } from '../engine/index';
+import { dayProfile } from '../constants/index';
 
 // ═════════════════════════════════════════════════════════════════════
 // Leitner boxes
@@ -460,5 +461,79 @@ describe('scoreLesson', () => {
     const a = scoreLesson({ answers, usedHints: 5 });
     const b = scoreLesson({ answers, usedHints: 50 });
     expect(a.score).toBe(b.score);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// مرحلهٔ ۸ — پروفایل آموزشی هر روز (بهینه‌سازی ۱..۷)
+// ═════════════════════════════════════════════════════════════════════
+
+describe('dayProfile — arc of the 7-day cycle', () => {
+  it('covers every day 1..7', () => {
+    for (let d = 1; d <= 7; d++) {
+      const p = dayProfile(d);
+      expect(p.objective.length).toBeGreaterThan(10);
+      expect(p.objectiveFa.length).toBeGreaterThan(5);
+      expect(p.items.min).toBeLessThanOrEqual(p.items.max);
+      expect(p.part2.min).toBeLessThanOrEqual(p.part2.max);
+      expect(p.newItemRatio).toBeGreaterThanOrEqual(0);
+      expect(p.newItemRatio).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('day 1 is all-new content (first contact)', () => {
+    expect(dayProfile(1).newItemRatio).toBe(1);
+  });
+
+  it('review share grows toward the end of the cycle', () => {
+    const ratios = [1, 2, 3, 4, 5].map((d) => dayProfile(d).newItemRatio);
+    expect(ratios[ratios.length - 1]).toBeLessThan(ratios[0]!);
+    expect(dayProfile(7).newItemRatio).toBe(0); // تثبیت = فقط مرور
+  });
+
+  it('day 5 (fluency) and day 6 (assessment) are mostly review', () => {
+    expect(dayProfile(5).newItemRatio).toBeLessThanOrEqual(0.3);
+    expect(dayProfile(6).newItemRatio).toBeLessThanOrEqual(0.15);
+  });
+
+  it('falls back to day 1 profile for out-of-range numbers', () => {
+    expect(dayProfile(99).phase).toBe(dayProfile(1).phase);
+    expect(dayProfile(0).phase).toBe(dayProfile(1).phase);
+  });
+
+  it('each day has a distinct phase label', () => {
+    const phases = new Set([1, 2, 3, 4, 5, 6, 7].map((d) => dayProfile(d).phase));
+    expect(phases.size).toBe(7);
+  });
+});
+
+describe('buildCycleDays — objectives surfaced to the UI', () => {
+  const base = {
+    cycleStatus: 'ACTIVE' as const,
+    completedDays: [] as number[],
+  };
+
+  it('falls back to the fixed profile when DB has no objective', () => {
+    const days = buildCycleDays({ ...base, lessonTitles: {} });
+    expect(days).toHaveLength(7);
+    expect(days[2]!.phase).toBe('APPLY');
+    expect(days[2]!.objective).toBe(dayProfile(3).objective);
+    expect(days[2]!.objectiveFa).toBe(dayProfile(3).objectiveFa);
+  });
+
+  it('uses the DB objective when present', () => {
+    const days = buildCycleDays({
+      ...base,
+      lessonTitles: {},
+      objectives: { 3: 'Order food at a restaurant' },
+    });
+    expect(days[2]!.objective).toBe('Order food at a restaurant');
+  });
+
+  it('keeps locking rules intact (day n unlocks after n-1)', () => {
+    const days = buildCycleDays({ ...base, completedDays: [1], lessonTitles: {} });
+    expect(days[0]!.isCompleted).toBe(true);
+    expect(days[1]!.isActive).toBe(true);
+    expect(days[2]!.isLocked).toBe(true);
   });
 });

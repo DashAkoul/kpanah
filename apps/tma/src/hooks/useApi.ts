@@ -69,6 +69,8 @@ export interface HomeData {
   lesson: Lesson | null;
   generating: boolean;
   generationStatus: string | null;
+  /** دلیل خطا وقتی تولید چرخه شکست خورده (فقط برای FAILED) */
+  generationError?: string | null;
 }
 
 export function useHome() {
@@ -220,6 +222,13 @@ export function useOnboarding() {
       targetLanguage: string;
       skillLevel: string;
       learningGoal: string;
+      dialect?: string | null;
+      dailyMinutes?: number | null;
+      placement?: {
+        score: number;
+        estimatedLevel: string;
+        answers: number;
+      } | null;
     }) => {
       if (MOCK) {
         await new Promise((r) => setTimeout(r, 900));
@@ -290,11 +299,16 @@ export function useAdminUsers(params: { limit?: number; offset?: number; q?: str
 
   return useQuery({
     queryKey: ['admin-users', params],
-    enabled: Boolean(isAdmin),
+    // ⚠️ قبلاً `Boolean(isAdmin)` باعث می‌شد اگر پروفایل دیر لود شود یا پرچم
+    // لحظه‌ای undefined باشد، لیست اصلاً گرفته نشود («یک‌بار می‌آید، یک‌بار نه»).
+    // حالا فقط وقتی صریحاً *غیر‌ادمین* باشیم غیرفعال می‌شود.
+    enabled: isAdmin !== false,
     queryFn: async () => {
       if (MOCK) return { users: MOCK_ADMIN_USERS as never[] };
       return api.adminUsers(params) as Promise<{ users: never[] }>;
     },
+    staleTime: 30_000,
+    retry: 2,
   });
 }
 
@@ -433,6 +447,86 @@ export function useTestAiProvider() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-ai-providers'] });
+    },
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// پشتیبانی (تیکت)
+// ═════════════════════════════════════════════════════════════════════
+
+export interface SupportTicket {
+  id: string;
+  subject: string;
+  category: string;
+  status: string;
+  last_message: string | null;
+  last_at: string;
+  unread_for_user: boolean;
+}
+
+export interface SupportMessage {
+  id: string;
+  author: 'USER' | 'ADMIN';
+  body: string;
+  created_at: string;
+}
+
+export function useSupportTickets() {
+  return useQuery({
+    queryKey: ['support-tickets'],
+    queryFn: async () => (await api.supportList()) as { tickets: SupportTicket[] },
+    staleTime: 15_000,
+  });
+}
+
+export function useSupportThread(ticketId: string) {
+  return useQuery({
+    queryKey: ['support-thread', ticketId],
+    queryFn: async () =>
+      (await api.supportThread(ticketId)) as {
+        ticket: SupportTicket;
+        messages: SupportMessage[];
+      },
+    enabled: Boolean(ticketId),
+    staleTime: 10_000,
+  });
+}
+
+export function useCreateTicket() {
+  const queryClient = useQueryClient();
+  const showToast = useUiStore((s) => s.showToast);
+  return useMutation({
+    mutationFn: (body: { subject: string; body: string; category: string }) =>
+      api.supportCreate(body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['support-tickets'] });
+      showToast('تیکت شما ثبت شد ✅', 'success');
+    },
+    onError: () => showToast('ثبت تیکت ناموفق بود', 'error'),
+  });
+}
+
+export function useReplyTicket() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ ticketId, body }: { ticketId: string; body: string }) =>
+      api.supportReply(ticketId, body),
+    onSuccess: (_d, v) => {
+      void queryClient.invalidateQueries({ queryKey: ['support-thread', v.ticketId] });
+      void queryClient.invalidateQueries({ queryKey: ['support-tickets'] });
+    },
+  });
+}
+
+export function useCloseTicket() {
+  const queryClient = useQueryClient();
+  const showToast = useUiStore((s) => s.showToast);
+  return useMutation({
+    mutationFn: (ticketId: string) => api.supportClose(ticketId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['support-tickets'] });
+      showToast('تیکت بسته شد', 'info');
     },
   });
 }

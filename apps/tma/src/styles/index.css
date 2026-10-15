@@ -36,6 +36,33 @@ html[data-theme='dark'],
   -webkit-tap-highlight-color: transparent;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   Selection
+   متن رابط (دکمه‌ها، منوها، پیام‌ها) نباید انتخاب شود — حس اپ نیتیو.
+   فقط ورودی‌ها و محتوای آموزشی/قابل‌کپی اجازهٔ انتخاب دارند.
+   ══════════════════════════════════════════════════════════════════ */
+
+html,
+body {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable='true'],
+.selectable,
+.lesson-content,
+.target-text {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 html,
 body {
   margin: 0;
@@ -56,6 +83,9 @@ body {
   min-height: 100%;
   display: flex;
   flex-direction: column;
+  /* ⚠️ بالای هالهٔ رنگی (aurora) باشد وگرنه محتوا زیر بلور محو می‌شود */
+  position: relative;
+  z-index: 1;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -79,9 +109,226 @@ body {
    Components
    ══════════════════════════════════════════════════════════════════ */
 
+/* ══════════════════════════════════════════════════════════════════
+   Liquid Glass — سفرهٔ شیشهٔ مایع
+   ══════════════════════════════════════════════════════════════════
+
+   ساختار یک سطح شیشهٔ خوب سه لایه دارد:
+     ۱. ته‌رنگ (tint) — رنگ خود پس‌زمینه با آلفا، تا متن همیشه خوانا بماند
+     ۲. بلور (blur) — محتوای زیر را می‌پوشاند
+     ۳. نور (specular) — یک درخشش نوری از لبهٔ بالا و سایهٔ ملایم بیرون
+
+   ⚠️ قاعدهٔ خوانایی: هرگز آلفا را از ۰.۷۵ پایین‌تر نبر. شیشهٔ خیلی
+   شفاف باعث می‌شود متن روی پس‌زمینهٔ شلوغ ناخوانا شود.
+   ══════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* آلفای پایهٔ شیشه — با تم تنظیم می‌شود */
+  --glass-alpha: 0.78;
+  --glass-blur: 22px;
+  /* درخشش لبهٔ بالا (specular) */
+  --glass-sheen: rgba(255, 255, 255, 0.65);
+  --glass-shadow: 0 8px 32px rgba(15, 23, 42, 0.1);
+  --glass-tint-mix: 8%;
+}
+
+html[data-theme='dark'],
+.dark {
+  --glass-alpha: 0.68;
+  --glass-blur: 24px;
+  --glass-sheen: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  --glass-tint-mix: 12%;
+}
+
+/* ── هالهٔ رنگی پس‌زمینه (aurora) ───────────────────────────────────
+   شیشهٔ خالی هیچ حسی ندارد؛ باید چیزی زیرش باشد که بلور شود.
+   این دو لایه ثابت و بسیار کم‌رنگ هستند (pointer-events-none) تا
+   فقط هنگام اسکرول محتوا یک عمق subtle بسازند.
+
+   ⚠️ چرا `z-index: 0` و نه `-1`: body خودش رنگ پس‌زمینه دارد و هر
+   عنصری با z-index منفی **پشت** آن رنگ می‌رود → نامرئی می‌شود.
+   جای درست: لایه‌ها در سطح خود body (z-index: 0) و محتوا بالاتر
+   (`#root { position: relative; z-index: 1 }`).
+   ──────────────────────────────────────────────────────────────── */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  pointer-events: none;
+  z-index: 0;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.5;
+}
+
+body::before {
+  width: 70vw;
+  height: 70vw;
+  max-width: 520px;
+  max-height: 520px;
+  top: -18vh;
+  inset-inline-end: -14vw;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 22%, transparent),
+    transparent 70%
+  );
+}
+
+body::after {
+  width: 60vw;
+  height: 60vw;
+  max-width: 460px;
+  max-height: 460px;
+  bottom: -14vh;
+  inset-inline-start: -16vw;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--tg-theme-button-color, #2563eb) 14%, transparent),
+    transparent 70%
+  );
+}
+
+html[data-theme='dark'] body::before,
+.dark body::before,
+html[data-theme='dark'] body::after,
+.dark body::after {
+  opacity: 0.35;
+}
+
+/* ── سطح پایهٔ شیشه ─────────────────────────────────────────────── */
 @layer components {
+  .glass {
+    /* ته‌رنگ: رنگ پس‌زمینه با آلفا */
+    background: color-mix(
+      in srgb,
+      var(--tg-theme-bg-color, #ffffff) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+    border: 1px solid
+      color-mix(in srgb, var(--tg-theme-text-color, #000000) 9%, transparent);
+  }
+
+  /* لایهٔ نور و سایه — روی هر سطح شیشه‌ای (nav, card, chip) */
+  .glass-sheen {
+    position: relative;
+  }
+
+  .glass-sheen::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    /* درخشش از بالا + خط نور روی لبهٔ بالا */
+    background: linear-gradient(
+      to bottom,
+      var(--glass-sheen) 0%,
+      transparent 42%
+    );
+    opacity: 0.55;
+    mix-blend-mode: overlay;
+  }
+
+  /* نوارهای چسبان (top/bottom nav) — بلور قوی‌تر و کم‌رنگ‌تر برای خوانایی */
+  .glass-nav {
+    background: color-mix(
+      in srgb,
+      var(--tg-theme-bg-color, #ffffff) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    backdrop-filter: blur(28px) saturate(1.9);
+    -webkit-backdrop-filter: blur(28px) saturate(1.9);
+    box-shadow:
+      inset 0 1px 0 var(--glass-sheen),
+      var(--glass-shadow);
+  }
+
+  /* شیشهٔ محکم — برای مودال/شیت که باید کاملاً مستحکم باشد */
+  .glass-strong {
+    background: color-mix(
+      in srgb,
+      var(--tg-theme-bg-color, #ffffff) 92%,
+      transparent
+    );
+    backdrop-filter: blur(32px) saturate(2);
+    -webkit-backdrop-filter: blur(32px) saturate(2);
+    border: 1px solid
+      color-mix(in srgb, var(--tg-theme-text-color, #000000) 10%, transparent);
+    box-shadow:
+      inset 0 1px 0 var(--glass-sheen),
+      var(--glass-shadow);
+  }
+
+  /* دکمهٔ شیشه‌ای — درخشش معلق بالای سطح */
+  .glass-btn {
+    background: linear-gradient(
+      to bottom,
+      color-mix(
+          in srgb,
+          var(--tg-theme-button-color, #2563eb) 92%,
+          #ffffff
+        )
+        0%,
+      var(--tg-theme-button-color, #2563eb) 100%
+    );
+    color: var(--tg-theme-button-text-color, #ffffff);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      0 4px 14px
+        color-mix(
+          in srgb,
+          var(--tg-theme-button-color, #2563eb) 35%,
+          transparent
+        );
+  }
+
+  .glass-btn:active {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 2px 6px
+        color-mix(
+          in srgb,
+          var(--tg-theme-button-color, #2563eb) 25%,
+          transparent
+        );
+  }
+
+  /* چیپ شیشه‌ای — سطح کوچک با لبهٔ نوری */
+  .glass-chip {
+    background: color-mix(
+      in srgb,
+      var(--tg-theme-bg-color, #ffffff) 70%,
+      transparent
+    );
+    backdrop-filter: blur(12px) saturate(1.6);
+    -webkit-backdrop-filter: blur(12px) saturate(1.6);
+    border: 1px solid
+      color-mix(in srgb, var(--tg-theme-text-color, #000000) 8%, transparent);
+    box-shadow: inset 0 1px 0 var(--glass-sheen);
+  }
+
   .card {
-    @apply rounded-card bg-card border border-border shadow-card;
+    @apply rounded-card border shadow-card;
+    background: color-mix(
+      in srgb,
+      var(--card-bg) calc(var(--glass-alpha) * 100%),
+      transparent
+    );
+    border-color: color-mix(in srgb, var(--tg-theme-text-color, #000000) 8%, transparent);
+    backdrop-filter: blur(18px) saturate(1.6);
+    -webkit-backdrop-filter: blur(18px) saturate(1.6);
+    box-shadow:
+      inset 0 1px 0 var(--glass-sheen),
+      0 2px 8px rgba(15, 23, 42, 0.06);
+  }
+
+  /* گوشه‌های نرم‌تر و سایهٔ ملایم برای حس شیشه‌ای */
+  .card {
+    border-radius: 18px;
   }
 
   .btn {
@@ -91,7 +338,7 @@ body {
   }
 
   .btn-primary {
-    @apply btn bg-accent text-accent-text shadow-sm;
+    @apply btn glass-btn shadow-sm;
   }
 
   .btn-secondary {

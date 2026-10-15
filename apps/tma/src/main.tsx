@@ -2,7 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './app/App';
 import { setupI18n, applyDocumentDirection } from './locales';
-import { initTelegram, getTelegramLanguage } from './lib/telegram';
+import { initTelegram, getTelegramLanguage, getWebApp } from './lib/telegram';
+import { readThemeMode, applyThemeMode } from './lib/theme';
 import { languageFromTelegramCode } from '@kpanah/shared';
 import './styles/index.css';
 
@@ -17,6 +18,10 @@ import './styles/index.css';
  */
 async function bootstrap(): Promise<void> {
   initTelegram();
+
+  // تم را بلافاصله اعمال کن (auto = از تلگرام) تا اولین رنگ‌آمیزی درست باشد
+  const wa = getWebApp();
+  applyThemeMode(readThemeMode(), wa?.colorScheme ?? null, wa?.themeParams ?? null);
 
   // زبان ذخیره‌شده کاربر اولویت دارد؛ وگرنه از تلگرام
   const stored = readStoredLanguage();
@@ -34,6 +39,16 @@ async function bootstrap(): Promise<void> {
       <App />
     </React.StrictMode>
   );
+
+  // اسپلش درون‌خطی را پس از اولین رندر محو کن
+  requestAnimationFrame(() => {
+    const splash = document.getElementById('boot-splash');
+    if (splash) {
+      splash.style.transition = 'opacity .25s ease';
+      splash.style.opacity = '0';
+      window.setTimeout(() => splash.remove(), 300);
+    }
+  });
 }
 
 function readStoredLanguage(): ReturnType<typeof languageFromTelegramCode> | null {

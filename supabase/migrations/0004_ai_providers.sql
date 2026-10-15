@@ -134,7 +134,7 @@ insert into ai_providers
   (label, protocol, vendor, model, priority, supports_json_schema,
    api_key_encrypted, key_hint, note)
 values
-  ('Gemini Flash (from env)', 'gemini', 'gemini', 'gemini-2.5-flash',
+  ('Gemini Flash (from env)', 'gemini', 'gemini', 'gemini-3.8-flash',
    10, true, '__FROM_ENV__', 'env',
    'Seeded placeholder — uses GEMINI_API_KEY. Replace with a real key or disable.'),
   ('DeepSeek (from env)', 'openai_compatible', 'deepseek', 'deepseek-chat',

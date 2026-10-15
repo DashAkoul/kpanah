@@ -2,6 +2,7 @@ import {
   CYCLE_LENGTH_DAYS,
   CYCLE_SCHEDULE,
   CYCLE_STALL_DAYS,
+  dayProfile,
   LEITNER_BOXES,
   LEITNER_INTERVALS_DAYS,
 } from '../constants/index.js';
@@ -201,6 +202,12 @@ export interface BuildCycleDaysInput {
   /** روزهایی که تکمیل شده‌اند */
   completedDays: number[];
   lessonTitles: Record<number, string>;
+  /**
+   * مرحلهٔ ۸ — هدف آموزشی هر روز (اختیاری). اگر نیاید، از پروفایل ثابت
+   * روز (`DAY_PROFILES`) پر می‌شود تا UI همیشه مرحله را نشان بدهد.
+   */
+  objectives?: Record<number, string>;
+  objectivesFa?: Record<number, string>;
 }
 
 /**
@@ -208,7 +215,7 @@ export interface BuildCycleDaysInput {
  * قاعده قفل: روز n فقط وقتی AVAILABLE است که روز n-1 تمام شده باشد.
  */
 export function buildCycleDays(input: BuildCycleDaysInput): CycleDay[] {
-  const { cycleStatus, completedDays, lessonTitles } = input;
+  const { cycleStatus, completedDays, lessonTitles, objectives, objectivesFa } = input;
   const completedSet = new Set(completedDays);
 
   let currentDay: number | null = null;
@@ -222,6 +229,7 @@ export function buildCycleDays(input: BuildCycleDaysInput): CycleDay[] {
   return Array.from({ length: CYCLE_LENGTH_DAYS }, (_, i) => {
     const dayNumber = i + 1;
     const isCompleted = completedSet.has(dayNumber);
+    const profile = dayProfile(dayNumber);
 
     let status: LessonStatus;
     if (isCompleted) status = 'COMPLETED';
@@ -236,6 +244,10 @@ export function buildCycleDays(input: BuildCycleDaysInput): CycleDay[] {
       isCompleted,
       isActive: dayNumber === currentDay && cycleStatus === 'ACTIVE',
       isLocked: status === 'LOCKED',
+      // مرحلهٔ ۸ — برای نمایش «این روز چه چیزی یاد می‌دهد»
+      phase: profile.phase,
+      objective: objectives?.[dayNumber] ?? profile.objective,
+      objectiveFa: objectivesFa?.[dayNumber] ?? profile.objectiveFa,
     };
   });
 }

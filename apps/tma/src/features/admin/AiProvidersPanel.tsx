@@ -19,6 +19,8 @@ import {
   useTestAiProvider,
 } from '../../hooks/useApi';
 import { useUiStore } from '../../store/ui';
+import { useQueryClient } from '@tanstack/react-query';
+import { api } from '../../lib/api';
 import { haptic, showConfirm, showAlert } from '../../lib/telegram';
 
 /**
@@ -39,6 +41,7 @@ export function AiProvidersPanel() {
   const [editing, setEditing] = useState<AiProvider | 'new' | null>(null);
 
   const { data, isLoading, refetch } = useAiProviders();
+  const queryClient = useQueryClient();
   const reorder = useReorderAiProviders();
   const remove = useDeleteAiProvider();
   const test = useTestAiProvider();
@@ -48,7 +51,14 @@ export function AiProvidersPanel() {
   const providers = data?.providers ?? [];
   const [testingId, setTestingId] = useState<string | null>(null);
 
-  /** Move a provider one slot up or down and persist the new order. */
+  /**
+   * جابه‌جایی یک ردیف به بالا/پایین و ذخیرهٔ ترتیب جدید.
+   *
+   * ⚠️ قبلاً دکمه‌های ▲▼ فقط یک گلیف ۱۰ پیکسلی بودند و در مینی‌اپ تلگرام
+   * عملاً قابل لمس نبودند — کاربر فکر می‌کرد «ترتیب تغییر نمی‌کند».
+   * حالا دکمه‌ها هدف لمس واقعی دارند و لیست هم **optimistic** جابه‌جا می‌شود
+   * تا نتیجه بلافاصله دیده شود.
+   */
   async function move(index: number, direction: -1 | 1) {
     const target = index + direction;
     if (target < 0 || target >= providers.length) return;
@@ -59,10 +69,20 @@ export function AiProvidersPanel() {
     next.splice(target, 0, moved);
 
     haptic('tap');
+
+    // جابه‌جایی فوری در کش تا کاربر بلافاصله نتیجه را ببیند
+    queryClient.setQueryData(
+      ['admin-ai-providers'],
+      (old: { providers: AiProvider[] } | undefined) =>
+        old ? { ...old, providers: next } : old
+    );
+
     try {
       await reorder.mutateAsync(next.map((p) => p.id));
+      haptic('success');
     } catch {
       showToast(t('admin.ai.reorderFailed'), 'error');
+      void refetch();
     }
   }
 
@@ -112,6 +132,9 @@ export function AiProvidersPanel() {
       <Card className="p-3">
         <p className="text-xs leading-relaxed text-text-hint">
           {t('admin.ai.explain')}
+        </p>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-text-hint">
+          {t('admin.ai.reorderHint')}
         </p>
       </Card>
 
@@ -251,25 +274,27 @@ function ProviderCard({
 
   return (
     <Card className={clsx('p-3', !p.isActive && 'opacity-60')}>
-      <div className="flex items-start gap-2">
-        {/* Order controls */}
-        <div className="flex flex-col items-center gap-0.5 pt-0.5">
+      <div className="flex items-start gap-2.5">
+        {/* Order controls — هدف لمس واقعی، نه گلیف ریز */}
+        <div className="flex shrink-0 flex-col items-center gap-1">
           <button
             type="button"
             onClick={onMoveUp}
             disabled={index === 0}
-            className="text-text-hint disabled:opacity-30"
-            aria-label="up"
+            aria-label={t('admin.ai.moveUp')}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-sm text-text transition active:scale-90 disabled:opacity-30"
           >
             ▲
           </button>
-          <span className="text-[10px] font-mono text-text-muted">{index + 1}</span>
+          <span className="text-[10px] font-semibold text-text-hint">
+            {t('admin.ai.priority')} {index + 1}
+          </span>
           <button
             type="button"
             onClick={onMoveDown}
             disabled={index === total - 1}
-            className="text-text-hint disabled:opacity-30"
-            aria-label="down"
+            aria-label={t('admin.ai.moveDown')}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-sm text-text transition active:scale-90 disabled:opacity-30"
           >
             ▼
           </button>
@@ -382,7 +407,7 @@ function ProviderSheet({
   });
 
   const [label, setLabel] = useState(provider?.label ?? '');
-  const [model, setModel] = useState(provider?.model ?? 'gemini-2.5-flash');
+  const [model, setModel] = useState(provider?.model ?? 'gemini-3.8-flash');
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '');
   const [apiKey, setApiKey] = useState('');
   const [protocol, setProtocol] = useState<AiProtocol>(provider?.protocol ?? 'gemini');
@@ -391,6 +416,55 @@ function ProviderSheet({
   const [maxTokens, setMaxTokens] = useState(String(provider?.maxOutputTokens ?? 8192));
   const [supportsSchema, setSupportsSchema] = useState(provider?.supportsJsonSchema ?? false);
   const [busy, setBusy] = useState(false);
+
+  // مدل‌های قابل‌استفاده با این کلید (پس از تست)
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  /**
+   * تست کلید + دریافت فهرست مدل‌ها.
+   * اگر provider ذخیره‌شده باشد و کلید جدیدی وارد نشده باشد، از کلید ذخیره‌شده
+   * استفاده می‌شود؛ وگرنه کلید تایپ‌شده همان لحظه تست می‌شود (بدون ذخیره).
+   */
+  async function loadModels() {
+    setModelsBusy(true);
+    setModelsError(null);
+    try {
+      const typedKey = apiKey.trim();
+      const result = typedKey
+        ? ((await api.adminAiProviderModels({
+            protocol,
+            vendor,
+            baseUrl: baseUrl.trim() || null,
+            apiKey: typedKey,
+          })) as { ok: boolean; models: string[]; error?: string })
+        : ((await api.adminAiProviderModels({ id: provider!.id })) as {
+            ok: boolean;
+            models: string[];
+            error?: string;
+          });
+
+      if (!result.ok) {
+        setModels([]);
+        setModelsError(result.error ?? t('admin.ai.testFailed', { error: '' }));
+        return;
+      }
+      setModels(result.models);
+      if (result.models.length === 0) {
+        setModelsError(t('admin.ai.noModels'));
+      } else if (!result.models.includes(model) && result.models.length > 0) {
+        // مدل فعلی در فهرست نیست → اولین مدل را پیشنهاد بده
+        setModel(result.models[0]!);
+      }
+      showToast(t('admin.ai.modelsLoaded', { count: result.models.length }), 'success');
+    } catch (err) {
+      setModels([]);
+      setModelsError(err instanceof Error ? err.message : t('errors.generic'));
+    } finally {
+      setModelsBusy(false);
+    }
+  }
 
   /** Apply a vendor preset to the form (new providers only). */
   function applyPreset(id: AiVendorPreset) {
@@ -455,7 +529,7 @@ function ProviderSheet({
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={onClose}>
       <div
-        className="max-h-[88vh] w-full overflow-y-auto rounded-t-2xl bg-card p-4 animate-slide-up safe-bottom"
+        className="glass-strong max-h-[88vh] w-full overflow-y-auto rounded-t-2xl p-4 animate-slide-up safe-bottom"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
@@ -519,18 +593,7 @@ function ProviderSheet({
           />
         </Field>
 
-        {/* Model */}
-        <Field label={t('admin.ai.model')}>
-          <input
-            dir="ltr"
-            className="input target-text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="gemini-2.5-flash"
-          />
-        </Field>
-
-        {/* API key */}
+        {/* API key — قبل از تست/دریافت مدل‌ها لازم است */}
         <Field
           label={t('admin.ai.apiKey')}
           hint={isEdit ? t('admin.ai.apiKeyEditHint') : undefined}
@@ -545,6 +608,51 @@ function ProviderSheet({
             autoComplete="off"
           />
         </Field>
+
+        {/* Model — با دکمهٔ «تست و دریافت مدل‌ها» */}
+        <Field label={t('admin.ai.model')}>
+          <div className="flex gap-2">
+            <input
+              dir="ltr"
+              className="input target-text flex-1"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder="gemini-3.8-flash"
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={modelsBusy}
+              disabled={!apiKey.trim() && !isEdit}
+              onClick={() => void loadModels()}
+            >
+              🔍 {t('admin.ai.loadModels')}
+            </Button>
+          </div>
+        </Field>
+
+        {modelsError && (
+          <p className="text-[11px] leading-relaxed text-danger-500">{modelsError}</p>
+        )}
+
+        {/* کشویی مدل‌های قابل‌استفاده با این کلید */}
+        {models.length > 0 && (
+          <Field label={t('admin.ai.chooseModel')} hint={t('admin.ai.chooseModelHint')}>
+            <select
+              dir="ltr"
+              className="input target-text"
+              value={models.includes(model) ? model : ''}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              <option value="">—</option>
+              {models.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         {/* Base URL — only when the protocol needs one */}
         {(protocol === 'openai_compatible' || preset === 'custom') && (

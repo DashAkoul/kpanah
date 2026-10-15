@@ -10,12 +10,29 @@ import type { Env } from '../types';
  *   complete-lesson(day 7) → enqueue → QStash → POST /internal/queue?internal=generate-cycle
  */
 
-export interface QueueMessage {
+export interface GenerateCycleMessage {
   kind: 'generate-cycle';
   userId: string;
   cycleNumber: number;
   attempt?: number;
 }
+
+/**
+ * تولید یک درس در پس‌زمینه (تولید ماژولار).
+ *
+ * پس از آماده شدن «نقشهٔ» چرخه و روز ۱، هر روز باقی‌مانده یک job جدا می‌شود
+ * تا هر درخواست فقط یک فراخوانی AI داشته باشد (خطای کمتر + retry ارزان).
+ */
+export interface GenerateLessonMessage {
+  kind: 'generate-lesson';
+  userId: string;
+  cycleId: string;
+  cycleNumber: number;
+  dayNumber: number;
+  attempt?: number;
+}
+
+export type QueueMessage = GenerateCycleMessage | GenerateLessonMessage;
 
 export class QStashClient {
   private readonly token?: string;

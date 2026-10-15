@@ -10,9 +10,10 @@ import { useSessionStore } from '../../store/session';
  *
  * States, in priority order:
  *   1. loading
- *   2. no cycle yet / cycle generating  → generation screen
- *   3. cycle complete, next not ready   → locked screen
- *   4. active lesson                    → roadmap + lesson card
+ *   2. generation failed                 → error screen + retry
+ *   3. no cycle yet / cycle generating   → generation screen
+ *   4. cycle complete, next not ready    → locked screen
+ *   5. active lesson                     → roadmap + lesson card
  */
 export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const { t } = useTranslation();
@@ -42,7 +43,33 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
     );
   }
 
-  // ── 2. Generating / no cycle ──────────────────────────────────────
+  // ── 2. Generation failed ───────────────────────────────────────────
+  // ⚠️ باید قبل از `!data.cycle` بررسی شود: حالا که API چرخهٔ FAILED را هم
+  // برمی‌گرداند، بدون این شرط به «چرخه کامل شد» می‌افتادیم که گمراه‌کننده است.
+  if (data.generationStatus === 'FAILED') {
+    return (
+      <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
+        <span className="text-4xl">🛠</span>
+        <p className="text-sm font-semibold text-text">{t('learn.generationFailed')}</p>
+        <p className="max-w-[280px] text-[11px] leading-relaxed text-text-hint">
+          {t('learn.generationFailedHint')}
+        </p>
+        {data.generationError && (
+          <p
+            className="max-w-[280px] rounded-lg border border-border bg-card p-2 text-left font-mono text-[9px] leading-relaxed text-text-muted"
+            dir="ltr"
+          >
+            {data.generationError.slice(0, 200)}
+          </p>
+        )}
+        <Button variant="secondary" size="sm" onClick={() => void refetch()}>
+          {t('common.retry')}
+        </Button>
+      </div>
+    );
+  }
+
+  // ── 3. Generating / no cycle ──────────────────────────────────────
   if (!data.cycle) {
     return (
       <GeneratingState
@@ -52,7 +79,7 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
     );
   }
 
-  // ── 3. Cycle finished, next not ready ─────────────────────────────
+  // ── 4. Cycle finished, next not ready ─────────────────────────────
   if (!data.lesson) {
     return <CycleCompleteState />;
   }

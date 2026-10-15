@@ -87,7 +87,7 @@ export class SupabaseClient {
     options: { single?: boolean } = {}
   ): Promise<T | null> {
     const url = new URL(`${this.baseUrl}/${table}`);
-    for (const [k, v] of Object.entries(match)) url.searchParams.set(k, `eq.${v}`);
+    for (const [k, v] of Object.entries(match)) url.searchParams.set(k, filterValue(v));
 
     const res = await fetch(url.toString(), {
       method: 'PATCH',
@@ -106,7 +106,7 @@ export class SupabaseClient {
   // ── DELETE ────────────────────────────────────────────────────────
   async delete(table: string, match: Record<string, string | number>): Promise<void> {
     const url = new URL(`${this.baseUrl}/${table}`);
-    for (const [k, v] of Object.entries(match)) url.searchParams.set(k, `eq.${v}`);
+    for (const [k, v] of Object.entries(match)) url.searchParams.set(k, filterValue(v));
 
     const res = await fetch(url.toString(), {
       method: 'DELETE',
@@ -148,8 +148,29 @@ export class SupabaseClient {
   }
 }
 
-export class SupabaseError extends Error {
-  constructor(
+/**
+ * عملگرهای فیلتر PostgREST — اگر مقدار با یکی از این‌ها شروع شود، دست‌نخورده
+ * می‌ماند؛ وگرنه `eq.` به آن اضافه می‌شود.
+ *
+ * ⚠️ چرا لازم است: بعضی فراخوان‌ها مقدار را خام می‌دهند (`{ id }`) و بعضی
+ * از قبل با عملگر می‌دهند (`{ id: 'eq.' + x }`, `{ read_at: 'is.null' }`).
+ * اگر همه را کورکورانه `eq.` بزنیم، نتیجه `id=eq.eq.<uuid>` می‌شود و
+ * PostgREST خطای 400 می‌دهد (ریشهٔ خطاهای ۵۰۰ در پنل مدیر).
+ */
+const PG_OPERATOR_PREFIXES = [
+  'eq.', 'neq.', 'gt.', 'gte.', 'lt.', 'lte.',
+  'like.', 'ilike.', 'match.', 'imatch.',
+  'in.', 'is.', 'not.', 'or.', 'and.',
+  'cs.', 'cd.', 'ov.', 'sl.', 'sr.', 'nxr.', 'nxl.', 'adj.',
+  'fts.', 'plfts.', 'phfts.', 'wfts.',
+] as const;
+
+function filterValue(v: string | number): string {
+  const s = String(v);
+  return PG_OPERATOR_PREFIXES.some((op) => s.startsWith(op)) ? s : `eq.${s}`;
+}
+
+export class SupabaseError extends Error {  constructor(
     public status: number,
     public body: string,
     public op: string

@@ -1,0 +1,4 @@
+# Override .gitignore for Wrangler's asset uploader.
+# The parent `dist/` is gitignored (build output), but Wrangler respects
+# .gitignore by default and would therefore upload nothing. An
+# .assetsignore file takes precedence, so we keep it empty-ish here.

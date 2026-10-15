@@ -25,12 +25,37 @@ import {
 } from './routes/learn';
 import { handlePlans, handleCreateInvoice } from './routes/store';
 import {
+  handleSupportCreate,
+  handleSupportList,
+  handleSupportThread,
+  handleSupportReply,
+  handleSupportClose,
+} from './routes/support';
+import {
   handleAdminUsers,
   handleAdminUserDetail,
   handleAdminGift,
   handleAdminRevoke,
   handleAdminStats,
+  handleAdminSupportList,
+  handleAdminSupportThread,
+  handleAdminSupportReply,
+  handleAdminListAdmins,
+  handleAdminSetRole,
+  handleAdminMessageSend,
+  handleAdminMessagesList,
+  handleAdminPlans,
+  handleAdminPlanCreate,
+  handleAdminPlanUpdate,
+  handleAdminPlanDelete,
 } from './routes/admin';
+import { handleMessagesList, handleMessagesRead } from './routes/messages';
+import { runLessonGeneration } from './routes/learn';
+import {
+  runHourlyMaintenance,
+  runBackgroundGeneration,
+  runDailyNudges,
+} from './services/cron';
 import {
   handleAdminListProviders,
   handleAdminCreateProvider,
@@ -38,6 +63,7 @@ import {
   handleAdminDeleteProvider,
   handleAdminReorderProviders,
   handleAdminTestProvider,
+  handleAdminListProviderModels,
 } from './routes/admin-ai';
 import { handleTelegramWebhook } from './routes/telegram-bot';
 import { handleAdminWebhook } from './routes/admin-bot';
@@ -94,7 +120,7 @@ export default {
       }
 
       // ── 4. auth ───────────────────────────────────────────────────
-      const auth = await authenticate(request, env, requestId, route.routeClass);
+      const auth = await authenticate(request, env, requestId, route.routeClass, route.action);
       if (auth.error) return withCors(auth.error, origin);
 
       const context: RequestContext = {
@@ -156,7 +182,106 @@ export default {
       );
     }
   },
+
+  /**
+   * ══════════════════════════════════════════════════════════════════
+   *  Cron Triggers
+   *
+   *  ⚠️ این سه کرون در wrangler.toml تعریف شده بودند ولی **handler نداشتند**
+   *  و هیچ کاری نمی‌کردند. اینجا پیاده شده‌اند.
+   *
+   *  چرا Cron به‌جای Queues: Cloudflare Queues/Workflows فقط روی پلن پولی
+   *  فعال است. Cron رایگان است و همین کار را انجام می‌دهد. اگر پلن ارتقا
+   *  یافت، binding `GENERATION_QUEUE` را اضافه کنید؛ کد خودکار صف را ترجیح
+   *  می‌دهد و کرون نقش تور اطمینان را بازی می‌کند.
+   * ══════════════════════════════════════════════════════════════════
+   */
+  async scheduled(controller: ScheduledController, rawEnv: Env): Promise<void> {
+    const env = withDefaults(rawEnv);
+    const cron = controller.cron;
+
+    try {
+      if (cron === '0 * * * *') {
+        const res = await runHourlyMaintenance(env);
+        console.log(`[cron:hourly] expired subscriptions: ${res.expired}`);
+      } else if (cron === '*/5 * * * *') {
+        const res = await runBackgroundGeneration(env);
+        console.log(
+          `[cron:gen] cycles=${res.cycles} lessons=${res.lessons} retried=${res.retried} failed=${res.failed}`
+        );
+      } else if (cron === '0 9 * * *') {
+        const res = await runDailyNudges(env);
+        console.log(`[cron:nudge] sent=${res.sent}`);
+      } else {
+        // کرون ناشناخته: کار نگهداری سبک را انجام بده
+        await runHourlyMaintenance(env);
+      }
+    } catch (err) {
+      console.error(`[cron:${cron}] failed:`, err instanceof Error ? err.message : err);
+    }
+  },
+
+  /**
+   * Cloudflare Queues consumer — تولید پس‌زمینهٔ درس.
+   *
+   * پیام‌ها از دو جا می‌آیند:
+   *  ۱. `runCycleGeneration` → شهر `generate-lesson` برای روزهای ۲..۷
+   *  ۲. `scheduleCycleGeneration` → شهر `generate-cycle`
+   *
+   * consumer جدا از درخواست کاربر اجرا می‌شود، پس سقف زمانی Worker
+   * مهم نیست (هر batch تا ۳۰ ثانیه فرصت دارد و retry با DLQ).
+   */
+  async queue(batch: MessageBatch<unknown>, rawEnv: Env): Promise<void> {
+    const env = withDefaults(rawEnv);
+
+    for (const msg of batch.messages) {
+      const body = msg.body as
+        | { kind?: string; userId?: string; cycleId?: string; cycleNumber?: number; dayNumber?: number }
+        | null;
+
+      try {
+        if (body?.kind === 'generate-cycle' && body.userId && typeof body.cycleNumber === 'number') {
+          const res = await runCycleGeneration(env, body.userId, body.cycleNumber);
+          if (!res.ok) {
+            // اگر موقتاً خطا داد، retry (m Times رسید به DLQ می‌رود)
+            msg.retry();
+          }
+        } else if (
+          body?.kind === 'generate-lesson' &&
+          body.userId &&
+          body.cycleId &&
+          typeof body.cycleNumber === 'number' &&
+          typeof body.dayNumber === 'number'
+        ) {
+          const res = await runLessonGeneration(
+            env,
+            body.userId,
+            body.cycleId,
+            body.cycleNumber,
+            body.dayNumber
+          );
+          if (!res.ok) msg.retry();
+        } else {
+          // پیام ناشناخته — دور بریز (skip)
+          msg.retry();
+        }
+      } catch (err) {
+        console.error(
+          `[queue] message failed:`,
+          err instanceof Error ? err.message : String(err)
+        );
+        msg.retry();
+      }
+    }
+  },
 } satisfies ExportedHandler<Env>;
+
+// ═════════════════════════════════════════════════════════════════════
+// Workflow export — باید در همان Worker باشه تا binding پیدا کند
+// ═════════════════════════════════════════════════════════════════════
+
+export { CycleGenerationWorkflow } from './workflow';
+
 
 // ═════════════════════════════════════════════════════════════════════
 // Path validation
@@ -247,6 +372,18 @@ async function dispatch(
     case 'create-invoice':
       return handleCreateInvoice(request, context);
 
+    // پشتیبانی (تیکت)
+    case 'support-create':
+      return handleSupportCreate(request, context);
+    case 'support-list':
+      return handleSupportList(request, context);
+    case 'support-thread':
+      return handleSupportThread(request, context);
+    case 'support-reply':
+      return handleSupportReply(request, context);
+    case 'support-close':
+      return handleSupportClose(request, context);
+
     // admin
     case 'admin-users':
       return handleAdminUsers(request, context);
@@ -258,6 +395,38 @@ async function dispatch(
       return handleAdminRevoke(request, context);
     case 'admin-stats':
       return handleAdminStats(request, context);
+
+    // admin — پشتیبانی
+    case 'admin-support-list':
+      return handleAdminSupportList(request, context);
+    case 'admin-support-thread':
+      return handleAdminSupportThread(request, context);
+    case 'admin-support-reply':
+      return handleAdminSupportReply(request, context);
+
+    // admin — نقش‌ها (RBAC)
+    case 'admin-list-admins':
+      return handleAdminListAdmins(request, context);
+    case 'admin-set-role':
+      return handleAdminSetRole(request, context);
+    case 'admin-message-send':
+      return handleAdminMessageSend(request, context);
+    case 'admin-messages-list':
+      return handleAdminMessagesList(request, context);
+    case 'admin-plans':
+      return handleAdminPlans(request, context);
+    case 'admin-plan-create':
+      return handleAdminPlanCreate(request, context);
+    case 'admin-plan-update':
+      return handleAdminPlanUpdate(request, context);
+    case 'admin-plan-delete':
+      return handleAdminPlanDelete(request, context);
+
+    // پیام‌های مدیر به کاربر
+    case 'messages-list':
+      return handleMessagesList(request, context);
+    case 'messages-read':
+      return handleMessagesRead(request, context);
 
     // admin — AI provider pool
     case 'admin-ai-providers':
@@ -272,6 +441,8 @@ async function dispatch(
       return handleAdminReorderProviders(request, context);
     case 'admin-ai-provider-test':
       return handleAdminTestProvider(request, context);
+    case 'admin-ai-provider-models':
+      return handleAdminListProviderModels(request, context);
 
     default:
       return jsonError('NOT_FOUND', `Unknown action`, context.requestId, env, 404);
@@ -289,6 +460,51 @@ async function handleQueueCallback(
   env: Env
 ): Promise<Response> {
   const kind = url.searchParams.get('internal');
+
+  // ── تولید یک درس در پس‌زمینه (تولید ماژولار) ──────────────────────
+  if (kind === 'generate-lesson') {
+    const body = (await request.json().catch(() => null)) as
+      | { userId?: string; cycleId?: string; cycleNumber?: number; dayNumber?: number }
+      | null;
+
+    if (
+      !body?.userId ||
+      !body.cycleId ||
+      typeof body.cycleNumber !== 'number' ||
+      typeof body.dayNumber !== 'number'
+    ) {
+      return jsonError(
+        'VALIDATION_ERROR',
+        'userId, cycleId, cycleNumber and dayNumber required',
+        context.requestId,
+        env,
+        400
+      );
+    }
+
+    const result = await runLessonGeneration(
+      env,
+      body.userId,
+      body.cycleId,
+      body.cycleNumber,
+      body.dayNumber
+    );
+
+    if (!result.ok) {
+      return jsonError(
+        'AI_UNAVAILABLE',
+        result.error ?? 'Lesson generation failed',
+        context.requestId,
+        env,
+        500
+      );
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   if (kind !== 'generate-cycle') {
     return jsonError('NOT_FOUND', 'Unknown job kind', context.requestId, env, 404);

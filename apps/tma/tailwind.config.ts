@@ -33,10 +33,11 @@ export default {
         card: 'var(--card-bg, #ffffff)',
         border: 'var(--border-color, #e4e4e7)',
 
-        // Fixed accent tints that must survive the theme swap, expressed with
-        // alpha support so `bg-accent-soft` and friends stay composable.
-        'accent-soft': 'rgb(37 99 235 / <alpha-value>)',
-        'accent-ring': 'rgb(37 99 235 / <alpha-value>)',
+        // ⚠️ عمداً `accent-soft` و `accent-ring` اینجا تعریف نشده‌اند.
+        // اگر در پالت باشند، Tailwind یوتیلیتی `.bg-accent-soft` با آبیِ کامل
+        // می‌سازد که روی کلاس کامپوننتیِ هم‌نام (لایهٔ components، تینت ۶٪)
+        // غلبه می‌کند → آیتم انتخاب‌شده آبیِ توپر با متنِ آبی و ناخوانا می‌شود.
+        // تینت‌ها در `src/styles/index.css` تعریف شده‌اند.
 
         brand: {
           50: 'rgb(238 246 255 / <alpha-value>)',

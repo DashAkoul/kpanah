@@ -1,7 +1,15 @@
 name = "kpanah-lang-edge"
 main = "src/index.ts"
-compatibility_date = "2024-09-23"
+compatibility_date = "2026-10-13"
 compatibility_flags = ["nodejs_compat"]
+
+# ─────────────────────────────────────────────────────────────────────
+# Custom Domain — جایگزین workers.dev (که در ایران فیلتر است)
+# دامنه باید در همان حساب Cloudflare باشد و زون آن Active شده باشد.
+# ─────────────────────────────────────────────────────────────────────
+routes = [
+  { pattern = "api.infolange.kdns.fr", custom_domain = true }
+]
 
 # مسیر مبهم‌سازی‌شده — مطابق سند امنیتی
 # (در محیط production می‌توانید با env override تغییر دهید)
@@ -27,6 +35,33 @@ id = "49474852f40b480d8acaf20becbc792c"
 preview_id = "49474852f40b480d8acaf20becbc792c"
 
 # ─────────────────────────────────────────────────────────────────────
+# Cloudflare Queues — تولید پس‌زمینهٔ درس‌ها
+# ⚠️ wrangler CLI خطای «queue settings are invalid» می‌دهد ولی صف از طریق
+# REST API ساخته شده و در پلن رایگان ۱۰٬۰۰۰ عملیات در روز دارد.
+# ─────────────────────────────────────────────────────────────────────
+
+[[queues.producers]]
+binding = "GENERATION_QUEUE"
+queue = "kpanah-generation"
+
+[[queues.consumers]]
+queue = "kpanah-generation"
+max_batch_size = 5
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "kpanah-generation-dlq"
+
+# ─────────────────────────────────────────────────────────────────────
+# Cloudflare Workflows — تولید چرخهٔ ۷ روزه به‌صورت durable
+# در پلن رایگان هم فعال است. مراحل: outline → day1..day7 → activate
+# ─────────────────────────────────────────────────────────────────────
+
+[[workflows]]
+name = "kpanah-cycle-workflow"
+binding = "CYCLE_WORKFLOW"
+class_name = "CycleGenerationWorkflow"
+
+# ─────────────────────────────────────────────────────────────────────
 # Secrets (با `wrangler secret put NAME` تنظیم کنید — در فایل نگذارید)
 #
 #   TELEGRAM_BOT_TOKEN
@@ -45,12 +80,14 @@ preview_id = "49474852f40b480d8acaf20becbc792c"
 # ─────────────────────────────────────────────────────────────────────
 
 [vars]
-MINI_APP_URL = "https://kpanah-lang.pages.dev"
-SELF_URL = "https://kpanah-lang-edge.language-app-backend.workers.dev"
+MINI_APP_URL = "https://app.infolange.kdns.fr"
+SELF_URL = "https://api.infolange.kdns.fr"
 GATE_PATH = "/kpanah56/8fjg7rfb/v1/gate"
-AI_PRIMARY_MODEL = "gemini-2.5-flash"
+AI_PRIMARY_MODEL = "gemini-3.8-flash"
 AI_FALLBACK_MODELS = "deepseek-chat,claude-3-5-sonnet-latest"
 ENABLE_PAYLOAD_ENCRYPTION = "false"
+MODULAR_GENERATION = "true"
+BACKGROUND_BUDGET_MS = "20000"
 RATE_LIMIT_PER_MINUTE = "60"
 RATE_LIMIT_PER_DAY = "2000"
 FREE_TRIAL_DAYS = "7"

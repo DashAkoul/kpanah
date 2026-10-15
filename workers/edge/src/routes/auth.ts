@@ -161,7 +161,12 @@ async function issueSession(
   }
 
   const subscription = await repo.getActiveSubscription(user.id);
-  const isAdmin = isAdminFromEnv(env, tgUser.id);
+  // نقش ادمین: لیست env → SUPER_ADMIN، وگرنه نقش ذخیره‌شده در دیتابیس.
+  // ⚠️ اگر نقش را اینجا resolve نکنیم، مدیرِ env با adminRole=null می‌ماند و
+  // تب «مدیران» او را غیرمجاز می‌بیند («فقط مدیر اصلی به این بخش دسترسی دارد»).
+  const dbRole = (user as { admin_role?: string | null }).admin_role ?? null;
+  const adminRole = isAdminFromEnv(env, tgUser.id) ? 'SUPER_ADMIN' : dbRole;
+  const isAdmin = Boolean(adminRole);
 
   // اگر کاربر ادمین است ولی پرچم در دیتابیس ست نشده، همگام‌سازی کن
   if (isAdmin !== user.is_admin) {
@@ -184,7 +189,7 @@ async function issueSession(
     SECURITY.jwtTtlSeconds
   );
 
-  const profile = toUserProfile(user, subscription, { isAdmin });
+  const profile = toUserProfile(user, subscription, { isAdmin, adminRole });
 
   return jsonSuccess({ token, user: profile }, requestId, env);
 }
@@ -211,8 +216,11 @@ export async function handleMe(
   }
 
   const subscription = await repo.getActiveSubscription(user.id);
+  const dbRole = (user as { admin_role?: string | null }).admin_role ?? null;
+  const adminRole = isAdminFromEnv(env, telegramId) ? 'SUPER_ADMIN' : dbRole;
   const profile = toUserProfile(user, subscription, {
-    isAdmin: isAdminFromEnv(env, telegramId),
+    isAdmin: Boolean(adminRole),
+    adminRole,
   });
 
   return jsonSuccess({ user: profile }, requestId, env);

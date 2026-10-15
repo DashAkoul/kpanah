@@ -1,4 +1,4 @@
-import { adminGiftSchema, PLAN_DURATION_DAYS } from '@kpanah/shared';
+import { adminGiftSchema, planUpsertSchema, PLAN_DURATION_DAYS } from '@kpanah/shared';
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import { ContentRepository } from '../services/repository';
@@ -353,4 +353,419 @@ async function notifyUserOfGift(
   } catch {
     // غیرحیاتی
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Admin — پشتیبانی (تیکت‌ها)
+// ═════════════════════════════════════════════════════════════════════
+
+export async function handleAdminSupportList(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const url = new URL(request.url);
+  const category = url.searchParams.get('category') ?? undefined;
+  const status = url.searchParams.get('status') ?? undefined;
+
+  const r = repo(env);
+  const tickets = await r.listAllSupportTickets({ category, status });
+  return jsonSuccess({ tickets }, requestId, env);
+}
+
+export async function handleAdminSupportThread(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const ticketId = new URL(request.url).searchParams.get('ticketId');
+  if (!ticketId) {
+    return jsonError('VALIDATION_ERROR', 'ticketId is required', requestId, env, 400);
+  }
+
+  const r = repo(env);
+  const thread = await r.getSupportThreadAdmin(ticketId);
+  if (!thread) return jsonError('NOT_FOUND', 'Ticket not found', requestId, env, 404);
+
+  return jsonSuccess(thread, requestId, env);
+}
+
+export async function handleAdminSupportReply(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const body = await readJson<{ ticketId?: string; body?: string }>(request);
+  const ticketId = body?.ticketId;
+  const message = (body?.body ?? '').trim().slice(0, 2000);
+
+  if (!ticketId || message.length < 1) {
+    return jsonError('VALIDATION_ERROR', 'ticketId and body are required', requestId, env, 400);
+  }
+
+  const r = repo(env);
+  await r.addSupportMessage({
+    ticketId,
+    userId: '',
+    author: 'ADMIN',
+    body: message,
+  });
+
+  return jsonSuccess({ ok: true }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Admin — مدیریت نقش‌ها (RBAC)
+// ═════════════════════════════════════════════════════════════════════
+
+const ROLES = ['SUPER_ADMIN', 'SUPPORT', 'MARKETING', 'FINANCE'] as const;
+
+/** آیدی‌های ادمین از env (همیشه SUPER_ADMIN) */
+function envAdminIds(env: RequestContext['env']): number[] {
+  return (env.TELEGRAM_ADMIN_IDS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/**
+ * لیست ادمین‌ها (فقط SUPER_ADMIN).
+ *
+ * ⚠️ ادمین‌های env ممکن است `admin_role = null` در DB داشته باشند، پس در
+ * پرس‌وجوی «admin_role not null» نمی‌آمدند و لیست خالی/ناقص بود. اینجا آن‌ها
+ * را با نقش SUPER_ADMIN ادغام می‌کنیم و `is_env: true` می‌گذاریم تا UI
+ * اجازهٔ حذف/تغییرشان را ندهد.
+ */
+export async function handleAdminListAdmins(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const r = repo(env);
+
+  const dbAdmins = await r.listAdmins();
+  const envIds = envAdminIds(env);
+
+  const present = new Set(
+    dbAdmins.map((a) => Number((a as { telegram_id: number }).telegram_id))
+  );
+
+  // ادمین‌های env که در DB نقش ثبت‌شده ندارند را اضافه کن
+  const missing = envIds.filter((id) => !present.has(id));
+  const envRows = await r.findUsersByTelegramIds(missing);
+
+  const envAdmins = envRows.map((row) => ({
+    ...row,
+    admin_role: 'SUPER_ADMIN',
+    is_env: true,
+  }));
+
+  // نقش ادمین‌های DB را هم نرمال کن
+  const admins = dbAdmins.map((a) => ({
+    ...a,
+    is_env: envIds.includes(Number((a as { telegram_id: number }).telegram_id)),
+  }));
+
+  return jsonSuccess(
+    { admins: [...envAdmins, ...admins], roles: ROLES },
+    requestId,
+    env
+  );
+}
+
+/** تعیین/حذف نقش ادمین یک کاربر (فقط SUPER_ADMIN) */
+export async function handleAdminSetRole(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId, adminRole } = context;
+  if (adminRole !== 'SUPER_ADMIN') {
+    return jsonError('UNAUTHORIZED', 'Only the main admin can change roles', requestId, env, 403);
+  }
+
+  const body = await readJson<{ telegramId?: number; role?: string | null; title?: string | null }>(
+    request
+  );
+  const telegramId = body?.telegramId;
+  const role = body?.role ?? null;
+  const title =
+    body?.title === undefined ? undefined : (body.title ?? '').trim().slice(0, 60) || null;
+
+  if (!telegramId || (role !== null && !ROLES.includes(role as never))) {
+    return jsonError('VALIDATION_ERROR', 'telegramId and a valid role are required', requestId, env, 400);
+  }
+
+  // ادمین env قابل تغییر نیست (همیشه SUPER_ADMIN است)
+  if (envAdminIds(env).includes(telegramId)) {
+    // ولی لقبش قابل ثبت است
+    if (title !== undefined) {
+      const r = repo(env);
+      const ok = await r.setAdminRole(telegramId, 'SUPER_ADMIN', title);
+      if (!ok) {
+        return jsonError('NOT_FOUND', 'کاربری با این آیدی پیدا نشد.', requestId, env, 404);
+      }
+      return jsonSuccess({ ok: true, telegramId, role: 'SUPER_ADMIN', title }, requestId, env);
+    }
+    return jsonError(
+      'VALIDATION_ERROR',
+      'این کاربر از طریق تنظیمات سرور (env) مدیر است و نقشش قابل تغییر نیست.',
+      requestId,
+      env,
+      409
+    );
+  }
+
+  const r = repo(env);
+  const ok = await r.setAdminRole(telegramId, role, title);
+  if (!ok) {
+    return jsonError(
+      'NOT_FOUND',
+      'کاربری با این آیدی پیدا نشد — کاربر باید ابتدا ربات را استارت کند.',
+      requestId,
+      env,
+      404
+    );
+  }
+
+  return jsonSuccess({ ok: true, telegramId, role, title }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Admin — ارسال پیام به کاربران
+// ═════════════════════════════════════════════════════════════════════
+
+export async function handleAdminMessageSend(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId, telegramId: senderTelegramId } = context;
+  const body = await readJson<{
+    telegramId?: number | null;
+    broadcast?: boolean;
+    title?: string;
+    body?: string;
+    kind?: string;
+    sendViaBot?: boolean;
+  }>(request);
+
+  const text = (body?.body ?? '').trim().slice(0, 3000);
+  const title = (body?.title ?? '').trim().slice(0, 150) || null;
+  const kind = ['INFO', 'PROMO', 'UPDATE', 'WARNING'].includes(body?.kind ?? '')
+    ? body!.kind!
+    : 'INFO';
+
+  if (text.length < 2) {
+    return jsonError('VALIDATION_ERROR', 'body is required', requestId, env, 400);
+  }
+
+  const r = repo(env);
+  const botText = title ? `${title}\n\n${text}` : text;
+  const viaBot = body?.sendViaBot !== false;
+
+  // نام فرستنده برای تاریخچهٔ پنل مدیر (با لقب، اگر ثبت شده باشد)
+  let senderName: string | null = null;
+  if (senderTelegramId) {
+    const me = await r.findUserByTelegramId(senderTelegramId);
+    const base =
+      [me?.first_name, me?.last_name].filter(Boolean).join(' ') ||
+      me?.username ||
+      `#${senderTelegramId}`;
+    const title = (me as { admin_title?: string | null } | null)?.admin_title;
+    senderName = title ? `${base} (${title})` : base;
+  }
+
+  // ── پیام همگانی ──────────────────────────────────────────────────
+  if (body?.broadcast) {
+    const users = await r.listAllTelegramIds();
+    let sent = 0;
+    for (const u of users) {
+      try {
+        await r.createAdminMessage({
+          userId: u.id,
+          telegramId: u.telegram_id,
+          title,
+          body: text,
+          kind,
+          senderTelegramId: senderTelegramId ?? null,
+          senderName,
+          sentViaBot: viaBot,
+        });
+        if (viaBot) {
+          await sendBotMessage(env, u.telegram_id, botText);
+        }
+        sent++;
+      } catch {
+        /* ادامه بده */
+      }
+    }
+    return jsonSuccess({ ok: true, broadcast: true, sent }, requestId, env);
+  }
+
+  // ── پیام به یک کاربر ─────────────────────────────────────────────
+  const targetTelegramId = body?.telegramId;
+  if (!targetTelegramId) {
+    return jsonError('VALIDATION_ERROR', 'telegramId or broadcast is required', requestId, env, 400);
+  }
+
+  // کاربر را پیدا کن تا userId را داشته باشیم
+  const target = await r.findUserByTelegramId(targetTelegramId);
+  if (!target) {
+    return jsonError(
+      'NOT_FOUND',
+      'کاربری با این آیدی پیدا نشد — کاربر باید ابتدا ربات را استارت کند.',
+      requestId,
+      env,
+      404
+    );
+  }
+
+  await r.createAdminMessage({
+    userId: target.id,
+    telegramId: targetTelegramId,
+    title,
+    body: text,
+    kind,
+    senderTelegramId: senderTelegramId ?? null,
+    senderName,
+    sentViaBot: viaBot,
+  });
+
+  if (viaBot) {
+    await sendBotMessage(env, targetTelegramId, botText);
+  }
+
+  return jsonSuccess({ ok: true, sent: 1 }, requestId, env);
+}
+
+/** تاریخچهٔ همهٔ پیام‌های ارسالی — با نام ادمین فرستنده (پنل مدیر) */
+export async function handleAdminMessagesList(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const r = repo(env);
+  const messages = await r.listAllAdminMessages(150);
+  return jsonSuccess({ messages }, requestId, env);
+}
+
+/** ارسال پیام ساده از ربات */
+async function sendBotMessage(env: RequestContext['env'], chatId: number, text: string): Promise<void> {
+  try {
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch {
+    /* غیرحیاتی */
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Admin — CRUD اشتراک‌ها (SUPER_ADMIN / FINANCE)
+// ═════════════════════════════════════════════════════════════════════
+
+/** لیست همهٔ پلن‌ها (شامل غیرفعال) برای پنل مدیر */
+export async function handleAdminPlans(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const r = repo(env);
+  const plans = await r.listAllPlans();
+  return jsonSuccess({ plans }, requestId, env);
+}
+
+/** ساخت پلن جدید */
+export async function handleAdminPlanCreate(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const body = await readJson(request);
+  const parsed = planUpsertSchema.safeParse(body);
+  if (!parsed.success) {
+    return jsonError(
+      'VALIDATION_ERROR',
+      parsed.error.issues[0]?.message ?? 'Invalid plan payload',
+      requestId,
+      env,
+      400
+    );
+  }
+
+  const r = repo(env);
+  try {
+    const plan = await r.createPlan(parsed.data);
+    return jsonSuccess({ plan }, requestId, env);
+  } catch (err) {
+    return jsonError(
+      'VALIDATION_ERROR',
+      err instanceof Error ? err.message : 'Could not create plan',
+      requestId,
+      env,
+      409
+    );
+  }
+}
+
+/** ویرایش پلن (قیمت، تخفیف، عنوان، فعال/غیرفعال …) */
+export async function handleAdminPlanUpdate(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const body = await readJson<Record<string, unknown>>(request);
+  const parsed = planUpsertSchema.safeParse(body);
+  if (!parsed.success) {
+    return jsonError(
+      'VALIDATION_ERROR',
+      parsed.error.issues[0]?.message ?? 'Invalid plan payload',
+      requestId,
+      env,
+      400
+    );
+  }
+
+  const id =
+    (typeof body?.id === 'string' ? body.id : undefined) ??
+    new URL(request.url).searchParams.get('id') ??
+    '';
+  if (!id) {
+    return jsonError('VALIDATION_ERROR', 'id is required', requestId, env, 400);
+  }
+
+  const r = repo(env);
+  try {
+    const plan = await r.updatePlan(id, parsed.data);
+    return jsonSuccess({ plan }, requestId, env);
+  } catch (err) {
+    return jsonError(
+      'NOT_FOUND',
+      err instanceof Error ? err.message : 'Could not update plan',
+      requestId,
+      env,
+      404
+    );
+  }
+}
+
+/** حذف پلن */
+export async function handleAdminPlanDelete(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const body = await readJson<{ id?: string }>(request).catch(() => null);
+  const id =
+    body?.id ?? new URL(request.url).searchParams.get('id') ?? '';
+  if (!id) {
+    return jsonError('VALIDATION_ERROR', 'id is required', requestId, env, 400);
+  }
+
+  const r = repo(env);
+  await r.deletePlan(id);
+  return jsonSuccess({ deleted: true, id }, requestId, env);
 }

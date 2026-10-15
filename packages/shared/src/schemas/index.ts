@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { UI_LANGUAGE_CODES, TARGET_LANGUAGE_CODES } from '../constants/index.js';
 
 /**
  * Strict JSON schema for AI-generated content.
@@ -22,8 +23,14 @@ export const lessonKindSchema = z.enum([
   'CONSOLIDATION',
 ]);
 
-export const uiLanguageSchema = z.enum(['fa', 'en', 'ar', 'tr', 'ru']);
-export const targetLanguageSchema = z.enum(['en', 'de', 'fr', 'es', 'tr', 'ar']);
+export const uiLanguageSchema = z.enum(UI_LANGUAGE_CODES);
+export const targetLanguageSchema = z.enum(TARGET_LANGUAGE_CODES);
+
+/** گویش انتخابی مثل en-US — اختیاری */
+export const dialectSchema = z.string().max(16).nullish();
+
+/** بودجهٔ زمانی روزانهٔ کاربر (دقیقه) */
+export const dailyMinutesSchema = z.number().int().min(5).max(300).nullish();
 
 export const planTypeSchema = z.enum([
   'TRIAL',
@@ -152,6 +159,41 @@ export const generatedCycleSchema = z
   );
 
 // ─────────────────────────────────────────────────────────────────────
+// طرح کلی چرخه (تولید ماژولار: outline → روز ۱ → بقیه در پس‌زمینه)
+// ─────────────────────────────────────────────────────────────────────
+
+export const outlineDaySchema = z.object({
+  dayNumber: z.number().int().min(1).max(7),
+  title: nonEmpty(150),
+  titleFa: nonEmpty(150),
+  kind: lessonKindSchema,
+  // مرحلهٔ ۸ — هدف آموزشی هر روز. اختیاری برای سازگاری با کش قدیمی.
+  objective: z.string().max(400).optional(),
+  objectiveFa: z.string().max(400).optional(),
+});
+
+export const cycleOutlineSchema = z
+  .object({
+    title: nonEmpty(150),
+    titleFa: nonEmpty(150),
+    focusSummary: nonEmpty(600),
+    days: z.array(outlineDaySchema).length(7),
+  })
+  .refine(
+    (c) => {
+      const days = c.days.map((d) => d.dayNumber).sort((a, b) => a - b);
+      return days.every((d, i) => d === i + 1);
+    },
+    { message: 'Outline must contain exactly days 1..7, each once' }
+  )
+  .refine((c) => c.days[5]?.kind === 'HIDDEN_ASSESSMENT', {
+    message: 'Day 6 must be HIDDEN_ASSESSMENT',
+  })
+  .refine((c) => c.days[6]?.kind === 'CONSOLIDATION', {
+    message: 'Day 7 must be CONSOLIDATION',
+  });
+
+// ─────────────────────────────────────────────────────────────────────
 // Delta report (input to AI — we also validate our own output)
 // ─────────────────────────────────────────────────────────────────────
 
@@ -209,11 +251,25 @@ export const onboardingRequestSchema = z.object({
   targetLanguage: targetLanguageSchema,
   skillLevel: skillLevelSchema,
   learningGoal: nonEmpty(100),
+  /** گویش انتخابی (مثل en-US) */
+  dialect: dialectSchema,
+  /** دقیقهٔ روزانهٔ انتخابی */
+  dailyMinutes: dailyMinutesSchema,
+  /** نتیجهٔ آزمون تعیین سطح (اگر انجام شده باشد) */
+  placement: z
+    .object({
+      score: z.number().min(0).max(100),
+      estimatedLevel: skillLevelSchema,
+      answers: z.number().int().min(0).max(100),
+    })
+    .nullish(),
 });
 
 export const updateProfileSchema = z.object({
   uiLanguage: uiLanguageSchema.optional(),
   targetLanguage: targetLanguageSchema.optional(),
+  dialect: dialectSchema,
+  dailyMinutes: dailyMinutesSchema,
   learningGoal: z.string().max(200).optional(),
   timezone: z.string().max(64).optional(),
 });
@@ -265,6 +321,37 @@ export const telemetryBatchSchema = z.object({
 
 export const purchasePlanSchema = z.object({
   planId: z.string().min(1).max(40),
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Admin — CRUD اشتراک‌ها (پنل مدیر)
+// ─────────────────────────────────────────────────────────────────────
+
+/** ساخت/ویرایش پلن. `id` نبود (یا خالی) یعنی «ساخت جدید». */
+export const planUpsertSchema = z.object({
+  id: z
+    .string()
+    .max(40)
+    .optional()
+    .transform((v) => (v && v.trim() ? v.trim() : undefined)),
+  planType: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^[A-Za-z0-9_]+$/, 'planType must be A-Z, 0-9 or _'),
+  titleFa: z.string().min(1).max(80),
+  titleEn: z.string().min(1).max(80),
+  durationDays: z.number().int().min(1).max(3650),
+  priceIrr: z.number().int().min(0).max(1_000_000_000).default(0),
+  priceStars: z.number().int().min(1).max(1_000_000),
+  discountPercent: z.number().int().min(0).max(90).default(0),
+  badge: z.enum(['POPULAR', 'BEST_VALUE']).nullish(),
+  isActive: z.boolean().default(true),
+  sortOrder: z.number().int().min(0).max(999).optional(),
+});
+
+export const planDeleteSchema = z.object({
+  id: z.string().min(1).max(40),
 });
 
 // Admin

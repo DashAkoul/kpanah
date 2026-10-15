@@ -31,9 +31,23 @@ export type LessonKind = 'TEACHING' | 'HIDDEN_ASSESSMENT' | 'CONSOLIDATION';
 
 export type SkillLevel = 'ZERO' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
 
-export type SupportedUiLanguage = 'fa' | 'en' | 'ar' | 'tr' | 'ru';
+/**
+ * زبان‌های رابط کاربری.
+ *
+ * پنج زبان اول ترجمهٔ کامل دارند؛ بقیه در صورت انتخاب، به انگلیسی
+ * (fallbackLng) برمی‌گردند — ولی انتخابشان برای کاربر آزاد است.
+ */
+export type SupportedUiLanguage =
+  | 'fa' | 'en' | 'ar' | 'tr' | 'ru'
+  | 'de' | 'fr' | 'es' | 'it' | 'pt' | 'nl' | 'sv' | 'pl' | 'uk' | 'ro'
+  | 'zh' | 'ja' | 'ko' | 'hi' | 'ur' | 'bn' | 'id' | 'ms' | 'th' | 'vi'
+  | 'az' | 'ku' | 'he' | 'el' | 'ps';
 
-export type SupportedTargetLanguage = 'en' | 'de' | 'fr' | 'es' | 'tr' | 'ar';
+/** زبان‌هایی که کاربر می‌تواند یاد بگیرد */
+export type SupportedTargetLanguage =
+  | 'en' | 'de' | 'fr' | 'es' | 'it' | 'pt' | 'ru' | 'zh' | 'ja' | 'ko'
+  | 'ar' | 'tr' | 'fa' | 'hi' | 'ur' | 'id' | 'ms' | 'nl' | 'pl' | 'sv'
+  | 'az' | 'ku' | 'he' | 'el' | 'uk' | 'ro' | 'th' | 'vi' | 'bn' | 'ps';
 
 export type AdminAction = 'GIFT' | 'REVOKE' | 'EXTEND' | 'DOWNGRADE';
 
@@ -81,6 +95,10 @@ export interface UserProfile {
   uiLanguage: SupportedUiLanguage;
   languageSource: 'TELEGRAM' | 'MANUAL';
   targetLanguage: SupportedTargetLanguage;
+  /** گویش انتخابی مثل en-US (اختیاری) */
+  dialect?: string | null;
+  /** بودجهٔ زمانی روزانهٔ کاربر به دقیقه (اختیاری) */
+  dailyMinutes?: number | null;
   skillLevel: SkillLevel;
   learningGoal: string | null;
   onboardingDone: boolean;
@@ -88,6 +106,8 @@ export interface UserProfile {
   longestStreak: number;
   starsBalance: number;
   isAdmin: boolean;
+  /** نقش ادمین محدود (SUPER_ADMIN/SUPPORT/MARKETING/FINANCE) — یا null */
+  adminRole?: string | null;
   createdAt: string;
   subscription: SubscriptionInfo | null;
   /** دسترسی کامل به بخش آموزشی */
@@ -201,6 +221,12 @@ export interface CycleDay {
   isCompleted: boolean;
   isActive: boolean;
   isLocked: boolean;
+  /** مرحلهٔ ۸ — برچسب کوتاه مرحلهٔ آموزشی روز: ORIENT/EXPAND/… */
+  phase?: string;
+  /** مرحلهٔ ۸ — هدف آموزشی روز (یک جمله) */
+  objective?: string;
+  /** نسخهٔ فارسی هدف (اگر UI فارسی بود) */
+  objectiveFa?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -267,6 +293,33 @@ export interface GeneratedLesson {
   part2: Part2Data;
 }
 
+/**
+ * طرح کلی چرخه (Outline) — مرحلهٔ اول تولید ماژولار.
+ *
+ * اول فقط «نقشهٔ» ۷ روز ساخته می‌شود (ارزان و سریع)، بعد محتوای روز ۱
+ * تولید و نشان داده می‌شود، و بقیهٔ روزها در پس‌زمینه پر می‌شوند.
+ */
+export interface OutlineDay {
+  dayNumber: number;
+  title: string;
+  titleFa: string;
+  kind: LessonKind;
+  /**
+   * هدف آموزشی روز (مرحلهٔ ۸). اختیاری است تا چرخه‌های قدیمی که در
+   * `content_cache` نشسته‌اند هم without crash بخوانند؛ اگر نبود، کد از
+   * `dayProfile(dayNumber)` استفاده می‌کند.
+   */
+  objective?: string;
+  objectiveFa?: string;
+}
+
+export interface CycleOutline {
+  title: string;
+  titleFa: string;
+  focusSummary: string;
+  days: OutlineDay[];
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Store / payments
 // ─────────────────────────────────────────────────────────────────────
@@ -301,6 +354,8 @@ export interface AdminUserSummary {
   telegramId: number;
   displayName: string;
   username: string | null;
+  /** زبان رابط کاربر — مدیر برای نوشتن پیام به زبان همان کاربر لازم دارد */
+  uiLanguage: string;
   skillLevel: SkillLevel;
   planType: PlanType | null;
   daysRemaining: number;

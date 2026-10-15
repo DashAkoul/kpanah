@@ -10,6 +10,7 @@ import {
   extractTokenFromStartParam,
   extractStartParam,
 } from '@kpanah/shared';
+import { readThemeMode, applyThemeMode, themeColorFor } from './theme';
 
 export interface TelegramWebApp {
   initData: string;
@@ -90,6 +91,24 @@ declare global {
   }
 }
 
+/** بستن کامل Mini App (پس از حذف حساب و مانند آن) */
+export function closeApp(): void {
+  try {
+    const wa = window.Telegram?.WebApp;
+    if (wa && typeof wa.close === 'function') {
+      wa.close();
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    window.close();
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getWebApp(): TelegramWebApp | null {
   return window.Telegram?.WebApp ?? null;
 }
@@ -140,18 +159,13 @@ export function initTelegram(): TelegramWebApp | null {
 }
 
 function applyTheme(scheme: 'light' | 'dark', params: Record<string, string>): void {
-  document.documentElement.dataset.theme = scheme;
-  document.documentElement.classList.toggle('dark', scheme === 'dark');
-
-  // متغیرهای تلگرام را روی ریشه بگذار تا Tailwind از آن‌ها استفاده کند
-  for (const [key, value] of Object.entries(params ?? {})) {
-    const cssVar = `--tg-theme-${key.replace(/_/g, '-')}`;
-    document.documentElement.style.setProperty(cssVar, value);
-  }
+  // اگر کاربر تم دستی انتخاب کرده، همان را نگه دار؛ وگرنه از تلگرام پیروی کن.
+  const mode = readThemeMode();
+  applyThemeMode(mode, scheme, params);
 
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
-    meta.setAttribute('content', params?.bg_color ?? (scheme === 'dark' ? '#0f0f10' : '#ffffff'));
+    meta.setAttribute('content', themeColorFor(mode, params?.bg_color));
   }
 }
 

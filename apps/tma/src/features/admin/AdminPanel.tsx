@@ -9,36 +9,97 @@ import { useUiStore } from '../../store/ui';
 import { haptic, showConfirm } from '../../lib/telegram';
 import { api } from '../../lib/api';
 import { AiProvidersPanel } from './AiProvidersPanel';
+import { SupportQueuePanel, AdminsPanel, MessagesPanel, PlansPanel } from './AdminSupportPanel';
+import { Portal } from '../../components/Portal';
+import { useSessionStore } from '../../store/session';
+import { effectiveRole, type AdminRole } from '../../lib/roles';
 
 /**
  * Admin console (in-app).
  *
- * Two surfaces:
- *   • Users      — browse/search, gift a subscription from any plan, revoke
- *   • AI Engines — the provider pool: add, reorder, test, enable/disable
- *
- * The gifting operations are also available via the admin Telegram bot;
- * this panel is the richer surface. Provider management lives only here.
+ * Surfaces:
+ *   • Users      — browse/search, gift a subscription, revoke
+ *   • Support    — ticket queue with replies
+ *   • Messages   — send to one user or broadcast
+ *   • Plans      — create/edit/delete subscription plans (main admin + finance)
+ *   • Admins     — role management (RBAC, main admin only)
+ *   • AI Engines — the provider pool
  */
-type AdminTab = 'users' | 'ai';
+type AdminTab = 'users' | 'support' | 'messages' | 'plans' | 'admins' | 'ai';
+
+/**
+ * کدام نقش‌ها کدام تب را می‌بینند.
+ * (آینهٔ سرور در `middleware/auth.ts` — سرور هم مستقل بررسی می‌کند.)
+ */
+const TAB_ROLES: Record<AdminTab, AdminRole[]> = {
+  users: ['SUPER_ADMIN', 'SUPPORT', 'MARKETING', 'FINANCE'],
+  support: ['SUPER_ADMIN', 'SUPPORT'],
+  messages: ['SUPER_ADMIN', 'MARKETING'],
+  plans: ['SUPER_ADMIN', 'FINANCE'],
+  admins: ['SUPER_ADMIN'],
+  ai: ['SUPER_ADMIN'],
+};
 
 export function AdminPanel() {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<AdminTab>('users');
+  const user = useSessionStore((s) => s.user);
+  const role = effectiveRole(user);
+
+  const allowedTabs = (Object.keys(TAB_ROLES) as AdminTab[]).filter((tab) =>
+    role ? TAB_ROLES[tab].includes(role) : false
+  );
+
+  const [tab, setTab] = useState<AdminTab>(allowedTabs[0] ?? 'users');
+
+  // اگر نقش عوض شد و تب فعلی مجاز نبود، به اولین تب مجاز برگرد
+  const activeTab = allowedTabs.includes(tab) ? tab : (allowedTabs[0] ?? 'users');
+
+  if (!role || allowedTabs.length === 0) {
+    return <EmptyState icon="🔒" title={t('admin.noAccess')} />;
+  }
 
   return (
     <div className="space-y-3">
-      {/* Sub-tab switcher */}
-      <div className="flex gap-2 rounded-xl bg-[var(--surface-sunken)] p-1">
-        <TabButton active={tab === 'users'} onClick={() => setTab('users')}>
-          {t('admin.tabUsers')}
-        </TabButton>
-        <TabButton active={tab === 'ai'} onClick={() => setTab('ai')}>
-          {t('admin.tabAi')}
-        </TabButton>
+      {/* Sub-tab switcher — فقط تب‌های مجاز */}
+      <div className="flex gap-1 overflow-x-auto rounded-xl bg-[var(--surface-sunken)] p-1">
+        {allowedTabs.includes('users') && (
+          <TabButton active={activeTab === 'users'} onClick={() => setTab('users')}>
+            👥 {t('admin.tabUsers')}
+          </TabButton>
+        )}
+        {allowedTabs.includes('support') && (
+          <TabButton active={activeTab === 'support'} onClick={() => setTab('support')}>
+            💬 {t('support.tab')}
+          </TabButton>
+        )}
+        {allowedTabs.includes('messages') && (
+          <TabButton active={activeTab === 'messages'} onClick={() => setTab('messages')}>
+            ✉️ {t('admin.tabMessages')}
+          </TabButton>
+        )}
+        {allowedTabs.includes('plans') && (
+          <TabButton active={activeTab === 'plans'} onClick={() => setTab('plans')}>
+            💳 {t('admin.tabPlans')}
+          </TabButton>
+        )}
+        {allowedTabs.includes('admins') && (
+          <TabButton active={activeTab === 'admins'} onClick={() => setTab('admins')}>
+            🛡 {t('admin.tabAdmins')}
+          </TabButton>
+        )}
+        {allowedTabs.includes('ai') && (
+          <TabButton active={activeTab === 'ai'} onClick={() => setTab('ai')}>
+            🤖 {t('admin.tabAi')}
+          </TabButton>
+        )}
       </div>
 
-      {tab === 'users' ? <UsersPanel /> : <AiProvidersPanel />}
+      {activeTab === 'users' && <UsersPanel />}
+      {activeTab === 'support' && <SupportQueuePanel />}
+      {activeTab === 'messages' && <MessagesPanel />}
+      {activeTab === 'plans' && <PlansPanel />}
+      {activeTab === 'admins' && <AdminsPanel />}
+      {activeTab === 'ai' && <AiProvidersPanel />}
     </div>
   );
 }
@@ -151,6 +212,7 @@ interface AdminUser {
   telegramId: number;
   displayName: string;
   username: string | null;
+  uiLanguage: string;
   skillLevel: string;
   planType: string | null;
   daysRemaining: number;
@@ -190,6 +252,7 @@ function UserRow({
 
           <div className="mt-1.5 flex flex-wrap gap-1">
             <Chip>{user.skillLevel}</Chip>
+            <Chip>🌐 {user.uiLanguage}</Chip>
             {user.planType ? (
               <Chip tone={hasActive ? 'success' : 'neutral'}>
                 {user.planType} · {user.daysRemaining}d
@@ -248,76 +311,80 @@ function GiftSheet({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm"
-      onClick={onClose}
-    >
+    <Portal>
       <div
-        className="animate-slide-up safe-bottom w-full max-w-lg rounded-t-2xl bg-bg p-5"
-        onClick={(e) => e.stopPropagation()}
+        className="fixed inset-0 z-[100] flex flex-col justify-end bg-black/40 backdrop-blur-sm"
+        onClick={onClose}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-base font-bold text-text">{t('admin.giftTitle')}</h3>
-          <button type="button" onClick={onClose} className="text-text-hint">
-            ✕
-          </button>
-        </div>
-
-        <p className="mb-3 text-xs text-text-hint target-text" dir="ltr">
-          telegram_id: {telegramId}
-        </p>
-
-        {/* Plan picker */}
-        <p className="mb-2 text-xs font-medium text-text">{t('admin.selectPlan')}</p>
-        <div className="mb-4 grid grid-cols-2 gap-2">
-          {PLAN_DEFINITIONS.map((p) => (
-            <button
-              key={p.planType}
-              type="button"
-              onClick={() => setPlanType(p.planType)}
-              className={clsx(
-                'rounded-xl border p-2.5 text-start transition',
-                planType === p.planType
-                  ? 'border-accent bg-accent-soft ring-accent-soft'
-                  : 'border-border bg-card'
-              )}
-            >
-              <p className="text-xs font-semibold text-text">{p.titleFa}</p>
-              <p className="text-[10px] text-text-hint">{p.durationDays} روز</p>
+        <div
+          className="flex max-h-[88dvh] w-full max-w-lg flex-col rounded-t-2xl bg-bg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex shrink-0 items-center justify-between px-5 pb-2 pt-5">
+            <h3 className="text-base font-bold text-text">{t('admin.giftTitle')}</h3>
+            <button type="button" onClick={onClose} className="text-text-hint">
+              ✕
             </button>
-          ))}
-        </div>
+          </div>
 
-        {/* Extend toggle */}
-        <label className="mb-3 flex cursor-pointer items-center gap-2.5">
-          <input
-            type="checkbox"
-            checked={extend}
-            onChange={(e) => setExtend(e.target.checked)}
-            className="h-4 w-4 accent-[var(--tg-theme-button-color,#2563eb)]"
-          />
-          <span className="text-xs text-text">{t('admin.extendHint')}</span>
-        </label>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-3">
+            <p className="mb-3 text-xs text-text-hint target-text" dir="ltr">
+              telegram_id: {telegramId}
+            </p>
 
-        {/* Note */}
-        <input
-          type="text"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder={t('admin.note')}
-          className="input mb-4"
-          maxLength={200}
-        />
+            {/* Plan picker */}
+            <p className="mb-2 text-xs font-medium text-text">{t('admin.selectPlan')}</p>
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              {PLAN_DEFINITIONS.map((p) => (
+                <button
+                  key={p.planType}
+                  type="button"
+                  onClick={() => setPlanType(p.planType)}
+                  className={clsx(
+                    'rounded-xl border p-2.5 text-start transition',
+                    planType === p.planType
+                      ? 'border-accent bg-accent-soft'
+                      : 'border-border bg-card'
+                  )}
+                >
+                  <p className="text-xs font-semibold text-text">{p.titleFa}</p>
+                  <p className="text-[10px] text-text-hint">{p.durationDays} روز</p>
+                </button>
+              ))}
+            </div>
 
-        <div className="flex gap-2">
-          <Button variant="secondary" fullWidth onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-          <Button fullWidth loading={gift.isPending} onClick={() => void submit()}>
-            🎁 {t('admin.gift')}
-          </Button>
+            {/* Extend toggle */}
+            <label className="mb-3 flex cursor-pointer items-center gap-2.5">
+              <input
+                type="checkbox"
+                checked={extend}
+                onChange={(e) => setExtend(e.target.checked)}
+                className="h-4 w-4 accent-[var(--tg-theme-button-color,#2563eb)]"
+              />
+              <span className="text-xs text-text">{t('admin.extendHint')}</span>
+            </label>
+
+            {/* Note */}
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder={t('admin.note')}
+              className="input"
+              maxLength={200}
+            />
+          </div>
+
+          <div className="flex shrink-0 gap-2 border-t border-border px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <Button variant="secondary" fullWidth onClick={onClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button fullWidth loading={gift.isPending} onClick={() => void submit()}>
+              🎁 {t('admin.gift')}
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+    </Portal>
   );
 }

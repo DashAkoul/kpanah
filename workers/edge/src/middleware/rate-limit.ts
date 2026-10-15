@@ -103,7 +103,10 @@ async function bumpKV(
   counter.count += 1;
 
   // TTL = پنجره + کمی حاشیه
-  const ttl = Math.max(1, Math.ceil((counter.resetAt - now) / 1000) + 5);
+  // ⚠️ KV حداقل TTL = ۶۰ ثانیه می‌خواهد؛ بدون این کف، هر زمانیکه کمتر از
+  // ۶۰ ثانیه تا ریست باقی باشد `400 Invalid expiration_ttl` می‌گرفت و
+  // rate-limit بی‌صدا به حافظهٔ موقت fallback می‌کرد (یعنی اصلاً کار نمی‌کرد).
+  const ttl = Math.max(60, Math.ceil((counter.resetAt - now) / 1000) + 5);
   await kv.put(key, JSON.stringify(counter), { expirationTtl: ttl });
 
   return {

@@ -4,7 +4,9 @@ import type { Env } from './types';
  * Env با مقادیر پیش‌فرض ایمن — در تست محلی و preview کار می‌کند.
  */
 export const DEFAULT_ENV: Partial<Env> = {
-  AI_PRIMARY_MODEL: 'gemini-2.5-flash',
+  AI_PRIMARY_MODEL: 'gemini-3.8-flash',
+  /** تولید ماژولار (outline → روز ۱ → بقیه در پس‌زمینه). 'false' = خاموش */
+  MODULAR_GENERATION: 'true',
   AI_FALLBACK_MODELS: 'deepseek-chat,claude-3-5-sonnet-latest',
   ENABLE_PAYLOAD_ENCRYPTION: 'false',
   RATE_LIMIT_PER_MINUTE: '60',

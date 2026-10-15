@@ -1,7 +1,9 @@
 import type {
   Cycle,
   CycleGenerationInput,
+  CycleOutline,
   GeneratedCycle,
+  GeneratedLesson,
   Lesson,
   LessonKind,
   Plan,
@@ -18,6 +20,7 @@ import {
   CYCLE_LENGTH_DAYS,
   PLAN_DURATION_DAYS,
   buildCycleDays,
+  dayProfile,
   daysRemaining,
   evaluateAccess,
   lessonKindForDay,
@@ -89,6 +92,9 @@ interface LessonRow {
   title: string;
   title_fa: string | null;
   kind: LessonKind;
+  /** هدف آموزشی روز (مرحلهٔ ۸) — migration 0010؛ در DB قدیمی ممکن است نباشد */
+  objective?: string | null;
+  objective_fa?: string | null;
   part_1_data: unknown;
   part_2_data: unknown;
   status: string;
@@ -109,6 +115,22 @@ interface PlanRow {
   discount_percent: number;
   badge: string | null;
   is_active: boolean;
+  sort_order?: number;
+}
+
+/** ورودی ساخت/ویرایش پلن از پنل مدیر */
+export interface PlanUpsertInput {
+  id?: string;
+  planType: string;
+  titleFa: string;
+  titleEn: string;
+  durationDays: number;
+  priceIrr: number;
+  priceStars: number;
+  discountPercent: number;
+  badge?: string | null;
+  isActive?: boolean;
+  sortOrder?: number;
 }
 
 interface LexicalRow {
@@ -290,6 +312,118 @@ export class ContentRepository {
     await this.db.update('subscriptions', { id: subscriptionId }, { status: 'EXPIRED' });
   }
 
+  // ── کارهای زمان‌بندی‌شده (Cron) ───────────────────────────────────
+
+  /** اشتراک‌های ACTIVE که مهلتشان گذشته — برای انقضای دسته‌ای */
+  async listOverdueSubscriptions(limit = 200): Promise<{ id: string; user_id: string }[]> {
+    try {
+      const rows = await this.db.select<{ id: string; user_id: string }>('subscriptions', {
+        select: 'id,user_id',
+        status: 'eq.ACTIVE',
+        expires_at: `lt.${new Date().toISOString()}`,
+        limit: String(limit),
+      });
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
+  /** انقضای دسته‌ای اشتراک‌ها */
+  async expireSubscriptions(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.db.update('subscriptions', { id: `in.(${ids.join(',')})` }, {
+      status: 'EXPIRED',
+    });
+  }
+
+  /** چرخه‌های GENERATING که هنوز هیچ درسی ندارند (تولید نیمه‌کاره) */
+  async listGeneratingCyclesWithoutLessons(
+    limit = 5
+  ): Promise<{ id: string; user_id: string; cycle_number: number }[]> {
+    try {
+      const cycles = await this.db.select<{ id: string; user_id: string; cycle_number: number }>(
+        'cycles',
+        { select: 'id,user_id,cycle_number', status: 'eq.GENERATING', limit: String(limit * 4) }
+      );
+      const rows = asRows(cycles);
+      const out: { id: string; user_id: string; cycle_number: number }[] = [];
+      for (const c of rows) {
+        const lessons = await this.db.select<{ id: string }>('lessons', {
+          select: 'id',
+          cycle_id: `eq.${c.id}`,
+          limit: '1',
+        });
+        if (asRows(lessons).length === 0) out.push(c);
+        if (out.length >= limit) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * درس‌هایی که محتوایشان خالی است (`part_1_data = {}`) — یعنی در تولید
+   * ماژولار هنوز ساخته نشده‌اند. کرون این‌ها را از قبل می‌سازد تا کاربر
+   * انتظار نکشد.
+   */
+  async listLessonsMissingContent(
+    limit = 4
+  ): Promise<
+    { id: string; cycle_id: string; user_id: string; day_number: number; cycle_number: number }[]
+  > {
+    try {
+      const rows = await this.db.select<{
+        id: string;
+        cycle_id: string;
+        user_id: string;
+        day_number: number;
+      }>('lessons', {
+        select: 'id,cycle_id,user_id,day_number',
+        part_1_data: 'eq.{}',
+        order: 'day_number.asc',
+        limit: String(limit),
+      });
+      const out: {
+        id: string;
+        cycle_id: string;
+        user_id: string;
+        day_number: number;
+        cycle_number: number;
+      }[] = [];
+      for (const l of asRows(rows)) {
+        const cycle = await this.getCycleById(l.cycle_id);
+        if (!cycle) continue;
+        out.push({ ...l, cycle_number: cycle.cycle_number });
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /** کاربران فعال برای یادآور روزانه (اشتراک/دورهٔ آزمایشی معتبر) */
+  async listReminderTargets(
+    limit = 500
+  ): Promise<{ telegram_id: number; first_name: string | null; ui_language: string | null }[]> {
+    try {
+      const rows = await this.db.select<{
+        telegram_id: number;
+        first_name: string | null;
+        ui_language: string | null;
+      }>('users', {
+        select: 'telegram_id,first_name,ui_language',
+        is_blocked: 'eq.false',
+        order: 'created_at.desc',
+        limit: String(limit),
+      });
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
   // ── CYCLES ────────────────────────────────────────────────────────
 
   async getActiveCycle(userId: string): Promise<CycleRow | null> {
@@ -312,6 +446,33 @@ export class ContentRepository {
       select: '*',
     });
     return (rows as CycleRow[])[0] ?? null;
+  }
+
+  /**
+   * چرخه‌های FAILED که بیش از `minAgeMs` از شکست آن‌ها گذشته — برای تلاش
+   * دوبارهٔ کرون. `updated_at` به‌عنوان زمان آخرین تغییر استفاده می‌شود تا
+   * اگر همین حالا هم شکسته باشد، هر ۵ دقیقه دوباره امتحان نشود.
+   */
+  async listFailedCyclesForRetry(
+    minAgeMs: number,
+    limit = 1
+  ): Promise<
+    { id: string; user_id: string; cycle_number: number; focus_summary: string | null }[]
+  > {
+    const cutoff = new Date(Date.now() - minAgeMs).toISOString();
+    try {
+      const rows = await this.db.select<CycleRow>('cycles', {
+        status: 'eq.FAILED',
+        order: 'updated_at.asc',
+        limit: String(limit),
+        select: 'id,user_id,cycle_number,focus_summary,updated_at',
+      });
+      return (rows as unknown as Record<string, unknown>[])
+        .filter((c) => String(c.updated_at ?? '') < cutoff)
+        .slice(0, limit) as never;
+    } catch {
+      return [];
+    }
   }
 
   async getLatestCycle(userId: string): Promise<CycleRow | null> {
@@ -390,6 +551,96 @@ export class ContentRepository {
     }));
 
     await this.db.insert('lessons', rows.map(({ _order, ...r }) => r));
+  }
+
+  // ── تولید ماژولار ─────────────────────────────────────────────────
+  // outline → روز ۱ → بقیه در پس‌زمینه
+
+  /**
+   * نوشتن «نقشهٔ» چرخه + ۷ ردیف درس خالی.
+   *
+   * محتوای part_1/part_2 عمداً `{}` است تا بعداً `fillLessonContent` پرشان
+   * کند (ستون‌ها NOT NULL هستند). چرخه در وضعیت GENERATING می‌ماند تا روز ۱
+   * آماده شود.
+   */
+  async persistCycleOutline(
+    cycleId: string,
+    outline: CycleOutline,
+    meta: { model: string; ms: number; input: CycleGenerationInput }
+  ): Promise<void> {
+    await this.db.update('cycles', { id: cycleId }, {
+      title: outline.title,
+      title_fa: outline.titleFa,
+      focus_summary: outline.focusSummary,
+      status: 'GENERATING',
+      started_at: new Date().toISOString(),
+      generated_from: meta.input.delta as unknown as Record<string, unknown>,
+      generation_model: meta.model,
+      generation_ms: meta.ms,
+    });
+
+    const cycle = await this.getCycleById(cycleId);
+    if (!cycle) throw new Error(`Cycle ${cycleId} vanished after outline update`);
+
+    const rows = outline.days.map((d) => ({
+      cycle_id: cycleId,
+      user_id: cycle.user_id,
+      day_number: d.dayNumber,
+      title: d.title,
+      title_fa: d.titleFa,
+      kind: d.kind,
+      // مرحلهٔ ۸ — هدف آموزشی روز (برای تولید پس‌زمینهٔ همان روز)
+      objective: d.objective ?? dayProfile(d.dayNumber).objective,
+      objective_fa: d.objectiveFa ?? dayProfile(d.dayNumber).objectiveFa,
+      part_1_data: {} as Record<string, unknown>,
+      part_2_data: {} as Record<string, unknown>,
+      status: 'LOCKED',
+      is_completed: false,
+    }));
+
+    // upsert تا اجرای دوباره (retry) خطای unique ندهد
+    await this.db.insert('lessons', rows, { upsertOn: 'cycle_id,day_number' });
+  }
+
+  /** پر کردن محتوای یک روز (بعد از تولید) */
+  async fillLessonContent(
+    cycleId: string,
+    dayNumber: number,
+    lesson: GeneratedLesson,
+    status: 'LOCKED' | 'AVAILABLE'
+  ): Promise<void> {
+    await this.db.update(
+      'lessons',
+      { cycle_id: `eq.${cycleId}`, day_number: `eq.${dayNumber}` },
+      {
+        title: lesson.title,
+        title_fa: lesson.titleFa,
+        kind: lesson.kind,
+        part_1_data: lesson.part1 as unknown as Record<string, unknown>,
+        part_2_data: lesson.part2 as unknown as Record<string, unknown>,
+        status,
+      }
+    );
+  }
+
+  /** چرخه را فعال کن (بعد از آماده شدن روز ۱) */
+  async activateCycle(cycleId: string): Promise<void> {
+    await this.db.update('cycles', { id: cycleId }, { status: 'ACTIVE' });
+  }
+
+  /** چرخه را FAILED کن (وقتی هیچ روزی تولید نشد) */
+  async failCycle(cycleId: string): Promise<void> {
+    await this.db.update('cycles', { id: cycleId }, { status: 'FAILED' });
+  }
+
+  async getLessonByCycleDay(cycleId: string, dayNumber: number): Promise<LessonRow | null> {
+    const rows = await this.db.select<LessonRow>('lessons', {
+      cycle_id: `eq.${cycleId}`,
+      day_number: `eq.${dayNumber}`,
+      limit: '1',
+      select: '*',
+    });
+    return (rows as LessonRow[])[0] ?? null;
   }
 
   // ── LESSONS ───────────────────────────────────────────────────────
@@ -550,24 +801,61 @@ export class ContentRepository {
       select: '*',
     });
 
-    return ((rows as PlanRow[]) ?? []).map((r) => {
-      const priceIrr = Number(r.price_irr);
-      const discount = r.discount_percent;
-      return {
-        id: r.id,
-        planType: r.plan_type,
-        titleFa: r.title_fa,
-        titleEn: r.title_en,
-        durationDays: r.duration_days,
-        priceIrr,
-        priceStars: r.price_stars,
-        discountPercent: discount,
-        finalPriceIrr: Math.round(priceIrr * (1 - discount / 100)),
-        finalPriceStars: Math.round(r.price_stars * (1 - discount / 100)),
-        badge: r.badge,
-        isActive: r.is_active,
-      };
+    return ((rows as PlanRow[]) ?? []).map(toPlanDto);
+  }
+
+  // ── CRUD پلن‌ها (پنل مدیر) ────────────────────────────────────────
+
+  /** همهٔ پلن‌ها — شامل غیرفعال‌ها (فقط برای پنل مدیر) */
+  async listAllPlans(): Promise<Plan[]> {
+    const rows = await this.db.select<PlanRow>('plans', {
+      order: 'sort_order.asc',
+      select: '*',
     });
+    return ((rows as PlanRow[]) ?? []).map(toPlanDto);
+  }
+
+  async createPlan(input: PlanUpsertInput): Promise<Plan> {
+    const id = input.id?.trim() || input.planType.toLowerCase();
+    const rows = await this.db.insert<PlanRow>('plans', {
+      id,
+      plan_type: input.planType,
+      title_fa: input.titleFa,
+      title_en: input.titleEn,
+      duration_days: input.durationDays,
+      price_irr: input.priceIrr,
+      price_stars: input.priceStars,
+      discount_percent: input.discountPercent,
+      badge: input.badge ?? null,
+      is_active: input.isActive ?? true,
+      sort_order: input.sortOrder ?? 100,
+    });
+    const row = Array.isArray(rows) ? rows[0] : rows;
+    if (!row) throw new Error('createPlan returned no row');
+    return toPlanDto(row);
+  }
+
+  async updatePlan(id: string, input: PlanUpsertInput): Promise<Plan> {
+    const patch: Record<string, unknown> = {
+      plan_type: input.planType,
+      title_fa: input.titleFa,
+      title_en: input.titleEn,
+      duration_days: input.durationDays,
+      price_irr: input.priceIrr,
+      price_stars: input.priceStars,
+      discount_percent: input.discountPercent,
+      badge: input.badge ?? null,
+    };
+    if (input.isActive !== undefined) patch.is_active = input.isActive;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+
+    const row = await this.db.update<PlanRow>('plans', { id }, patch, { single: true });
+    if (!row) throw new Error('updatePlan found no row');
+    return toPlanDto(row);
+  }
+
+  async deletePlan(id: string): Promise<void> {
+    await this.db.delete('plans', { id });
   }
 
   async getPlanById(planId: string): Promise<PlanRow | null> {
@@ -630,7 +918,7 @@ export class ContentRepository {
       order: 'created_at.desc',
       limit: String(limit),
       offset: String(offset),
-      select: 'id,telegram_id,first_name,last_name,username,skill_level,streak_count,created_at',
+      select: 'id,telegram_id,first_name,last_name,username,ui_language,skill_level,streak_count,created_at',
     };
     if (search) {
       const term = search.replace(/[%,]/g, '');
@@ -653,6 +941,7 @@ export class ContentRepository {
           telegramId: u.telegram_id,
           displayName: [u.first_name, u.last_name].filter(Boolean).join(' ') || '—',
           username: u.username,
+          uiLanguage: u.ui_language ?? 'fa',
           skillLevel: u.skill_level as AdminUserSummary['skillLevel'],
           planType: sub?.plan_type ?? null,
           daysRemaining: sub ? daysRemaining(new Date(sub.expires_at)) : 0,
@@ -768,7 +1057,10 @@ export class ContentRepository {
     supportsJsonSchema: boolean;
     note: string | null;
   }): Promise<AiProviderRow | null> {
-    const rows = await this.db.insert<AiProviderRow>('ai_providers', {
+    // ⚠️ `db.insert` برای یک شیء، خودِ ردیف را برمی‌گرداند (نه آرایه).
+    // قبلاً اینجا `[0]` هم می‌گرفتیم → همیشه undefined → null → خطای ۵۰۰
+    // «Could not save provider» در حالی که ردیف در DB ساخته شده بود.
+    const row = await this.db.insert<AiProviderRow>('ai_providers', {
       label: input.label,
       protocol: input.protocol,
       vendor: input.vendor,
@@ -783,7 +1075,7 @@ export class ContentRepository {
       supports_json_schema: input.supportsJsonSchema,
       note: input.note,
     });
-    return (rows as AiProviderRow[])[0] ?? null;
+    return (row as AiProviderRow | null) ?? null;
   }
 
   /**
@@ -904,16 +1196,462 @@ export class ContentRepository {
       return [];
     }
   }
+
+  // ───────────────────────────────────────────────────────────────────
+  // پشتیبانی (تیکت‌ها)
+  // ───────────────────────────────────────────────────────────────────
+
+  async createSupportTicket(input: {
+    userId: string;
+    telegramId: number;
+    subject: string;
+    category: string;
+    body: string;
+  }): Promise<Record<string, unknown>> {
+    const ticket = await this.db.insert<Record<string, unknown>>('support_tickets', {
+      user_id: input.userId,
+      telegram_id: input.telegramId,
+      subject: input.subject,
+      category: input.category,
+      status: 'OPEN',
+      last_message: input.body.slice(0, 200),
+      last_at: new Date().toISOString(),
+      unread_for_user: false,
+      unread_for_admin: true,
+    });
+
+    const row = Array.isArray(ticket) ? ticket[0] : ticket;
+    const ticketId = (row as { id?: string })?.id;
+    if (ticketId) {
+      await this.db.insert('support_messages', {
+        ticket_id: ticketId,
+        author: 'USER',
+        body: input.body,
+      });
+    }
+    return (row as Record<string, unknown>) ?? {};
+  }
+
+  async listSupportTickets(userId: string): Promise<Record<string, unknown>[]> {
+    try {
+      const rows = await this.db.select<Record<string, unknown>>('support_tickets', {
+        select: '*',
+        user_id: `eq.${userId}`,
+        order: 'last_at.desc',
+        limit: '50',
+      });
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
+  async getSupportThread(
+    ticketId: string,
+    userId: string
+  ): Promise<{ ticket: Record<string, unknown>; messages: Record<string, unknown>[] } | null> {
+    const ticketRows = asRows(
+      await this.db.select<Record<string, unknown>>('support_tickets', {
+        select: '*',
+        id: `eq.${ticketId}`,
+        user_id: `eq.${userId}`,
+        limit: '1',
+      })
+    );
+    const ticket = ticketRows[0];
+    if (!ticket) return null;
+
+    const messages = asRows(
+      await this.db.select<Record<string, unknown>>('support_messages', {
+        select: '*',
+        ticket_id: `eq.${ticketId}`,
+        order: 'created_at.asc',
+        limit: '200',
+      })
+    );
+    return { ticket, messages };
+  }
+
+  async addSupportMessage(input: {
+    ticketId: string;
+    userId: string;
+    author: 'USER' | 'ADMIN';
+    authorRole?: string | null;
+    body: string;
+  }): Promise<boolean> {
+    // برای پیام کاربر، مالکیت تیکت بررسی می‌شود
+    if (input.author === 'USER') {
+      const owned = asRows(
+        await this.db.select<Record<string, unknown>>('support_tickets', {
+          select: 'id',
+          id: `eq.${input.ticketId}`,
+          user_id: `eq.${input.userId}`,
+          limit: '1',
+        })
+      );
+      if (!owned[0]) return false;
+    }
+
+    await this.db.insert('support_messages', {
+      ticket_id: input.ticketId,
+      author: input.author,
+      author_role: input.authorRole ?? null,
+      body: input.body,
+    });
+
+    await this.db.update(
+      'support_tickets',
+      { id: `eq.${input.ticketId}` },
+      {
+        last_message: input.body.slice(0, 200),
+        last_at: new Date().toISOString(),
+        status: input.author === 'ADMIN' ? 'ANSWERED' : 'OPEN',
+        unread_for_user: input.author === 'ADMIN',
+        unread_for_admin: input.author === 'USER',
+      }
+    );
+    return true;
+  }
+
+  async closeSupportTicket(ticketId: string, userId: string): Promise<void> {
+    await this.db.update(
+      'support_tickets',
+      { id: `eq.${ticketId}`, user_id: `eq.${userId}` },
+      { status: 'CLOSED', updated_at: new Date().toISOString() }
+    );
+  }
+
+  /** برای پنل ادمین — همهٔ تیکت‌ها با فیلتر اختیاری دسته/وضعیت */
+  async listAllSupportTickets(filter?: {
+    category?: string;
+    status?: string;
+  }): Promise<Record<string, unknown>[]> {
+    try {
+      const q: Record<string, string> = { select: '*', order: 'last_at.desc', limit: '100' };
+      if (filter?.category) q.category = `eq.${filter.category}`;
+      if (filter?.status) q.status = `eq.${filter.status}`;
+      const rows = await this.db.select<Record<string, unknown>>('support_tickets', q);
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
+  async getSupportThreadAdmin(
+    ticketId: string
+  ): Promise<{ ticket: Record<string, unknown>; messages: Record<string, unknown>[] } | null> {
+    const ticketRows = asRows(
+      await this.db.select<Record<string, unknown>>('support_tickets', {
+        select: '*',
+        id: `eq.${ticketId}`,
+        limit: '1',
+      })
+    );
+    const ticket = ticketRows[0];
+    if (!ticket) return null;
+    const messages = asRows(
+      await this.db.select<Record<string, unknown>>('support_messages', {
+        select: '*',
+        ticket_id: `eq.${ticketId}`,
+        order: 'created_at.asc',
+        limit: '200',
+      })
+    );
+    return { ticket, messages };
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // کش محتوا (صرفه‌جویی توکن)
+  // ───────────────────────────────────────────────────────────────────
+
+  async getCachedContent(kind: string, cacheKey: string): Promise<unknown | null> {
+    try {
+      const rows = asRows(
+        await this.db.select<Record<string, unknown>>('content_cache', {
+          select: 'payload',
+          kind: `eq.${kind}`,
+          cache_key: `eq.${cacheKey}`,
+          limit: '1',
+        })
+      );
+      const row = rows[0];
+      if (!row) return null;
+      // شمارندهٔ استفاده را بی‌صدا بالا ببر
+      this.db
+        .update(
+          'content_cache',
+          { kind: `eq.${kind}`, cache_key: `eq.${cacheKey}` },
+          { last_used_at: new Date().toISOString() }
+        )
+        .catch(() => {});
+      return row.payload ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async putCachedContent(
+    kind: string,
+    cacheKey: string,
+    language: string,
+    payload: unknown
+  ): Promise<void> {
+    try {
+      await this.db.insert('content_cache', {
+        kind,
+        cache_key: cacheKey,
+        language,
+        payload,
+      });
+    } catch {
+      /* کش اختیاری است */
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // مدیریت نقش‌های ادمین (RBAC)
+  // ───────────────────────────────────────────────────────────────────
+
+  /** لیست ادمین‌ها (کسی که admin_role دارد) */
+  async listAdmins(): Promise<Record<string, unknown>[]> {
+    try {
+      const rows = await this.db.select<Record<string, unknown>>('users', {
+        select:
+          'id,telegram_id,first_name,last_name,username,admin_role,admin_title,ui_language,created_at',
+        admin_role: 'not.is.null',
+        order: 'created_at.desc',
+        limit: '100',
+      });
+      return asRows(rows);
+    } catch {
+      // اگر ستون admin_title هنوز نیست (مهاجرت 0009 اجرا نشده) بدون آن بخوان
+      try {
+        const rows = await this.db.select<Record<string, unknown>>('users', {
+          select:
+            'id,telegram_id,first_name,last_name,username,admin_role,ui_language,created_at',
+          admin_role: 'not.is.null',
+          order: 'created_at.desc',
+          limit: '100',
+        });
+        return asRows(rows);
+      } catch {
+        return [];
+      }
+    }
+  }
+
+  /** اطلاعات چند کاربر با آیدی تلگرام (برای نمایش ادمین‌های env) */
+  async findUsersByTelegramIds(ids: number[]): Promise<Record<string, unknown>[]> {
+    if (ids.length === 0) return [];
+    try {
+      const rows = await this.db.select<Record<string, unknown>>('users', {
+        select:
+          'id,telegram_id,first_name,last_name,username,admin_role,admin_title,ui_language,created_at',
+        telegram_id: `in.(${ids.join(',')})`,
+        limit: String(ids.length),
+      });
+      return asRows(rows);
+    } catch {
+      try {
+        const rows = await this.db.select<Record<string, unknown>>('users', {
+          select:
+            'id,telegram_id,first_name,last_name,username,admin_role,ui_language,created_at',
+          telegram_id: `in.(${ids.join(',')})`,
+          limit: String(ids.length),
+        });
+        return asRows(rows);
+      } catch {
+        return [];
+      }
+    }
+  }
+
+  /**
+   * تعیین نقش (و لقب) ادمین برای یک کاربر (role = null → حذف نقش).
+   * اگر کاربر در دیتابیس نباشد `false` برمی‌گرداند تا UI پیام روشن بدهد.
+   */
+  async setAdminRole(
+    telegramId: number,
+    role: string | null,
+    title?: string | null
+  ): Promise<boolean> {
+    const found = asRows(
+      await this.db.select<{ id: string }>('users', {
+        select: 'id',
+        telegram_id: `eq.${telegramId}`,
+        limit: '1',
+      })
+    );
+    if (found.length === 0) return false;
+
+    const patch: Record<string, unknown> = { admin_role: role, is_admin: role !== null };
+    if (title !== undefined) patch.admin_title = title;
+
+    try {
+      await this.db.update('users', { telegram_id: `eq.${telegramId}` }, patch);
+    } catch {
+      // اگر ستون admin_title وجود ندارد (مهاجرت 0009) بدون آن ذخیره کن
+      delete patch.admin_title;
+      await this.db.update('users', { telegram_id: `eq.${telegramId}` }, patch);
+    }
+    return true;
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // پیام‌های مدیر به کاربران
+  // ───────────────────────────────────────────────────────────────────
+
+  /**
+   * ساخت یک پیام (برای یک کاربر یا همگانی).
+   *
+   * ستون‌های `sender_*` در مهاجرت 0008 اضافه می‌شوند. اگر آن مهاجرت هنوز
+   * اجرا نشده باشد، درج با این ستون‌ها خطا می‌دهد؛ برای اینکه «ارسال پیام»
+   * از کار نیفتد، بی‌صدا بدون آن‌ها دوباره تلاش می‌کنیم.
+   */
+  async createAdminMessage(input: {
+    userId: string | null;
+    telegramId: number | null;
+    title?: string | null;
+    body: string;
+    kind?: string;
+    senderTelegramId?: number | null;
+    senderName?: string | null;
+    sentViaBot?: boolean;
+  }): Promise<Record<string, unknown>> {
+    const base = {
+      user_id: input.userId,
+      telegram_id: input.telegramId,
+      title: input.title ?? null,
+      body: input.body,
+      kind: input.kind ?? 'INFO',
+    };
+
+    try {
+      const row = await this.db.insert<Record<string, unknown>>('admin_messages', {
+        ...base,
+        sender_telegram_id: input.senderTelegramId ?? null,
+        sender_name: input.senderName ?? null,
+        sent_via_bot: input.sentViaBot ?? false,
+      });
+      return (Array.isArray(row) ? row[0] : row) as Record<string, unknown>;
+    } catch {
+      // ستون‌های فرستنده وجود ندارند (مهاجرت 0008 اجرا نشده) → بدون آن‌ها
+      const row = await this.db.insert<Record<string, unknown>>('admin_messages', base);
+      return (Array.isArray(row) ? row[0] : row) as Record<string, unknown>;
+    }
+  }
+
+  /**
+   * همهٔ پیام‌های یک کاربر (خوانده و خوانده‌نشده).
+   * `read_at === null` یعنی خوانده‌نشده — بنر ورودی همان‌ها را نشان می‌دهد.
+   */
+  async listUserMessages(userId: string): Promise<Record<string, unknown>[]> {
+    const where = { user_id: `eq.${userId}`, order: 'created_at.desc', limit: '100' };
+    try {
+      const rows = await this.db.select<Record<string, unknown>>('admin_messages', {
+        select: 'id,title,body,kind,read_at,created_at,sender_name',
+        ...where,
+      });
+      return asRows(rows);
+    } catch {
+      // بدون ستون‌های مهاجرت 0008
+      try {
+        const rows = await this.db.select<Record<string, unknown>>('admin_messages', {
+          select: 'id,title,body,kind,read_at,created_at',
+          ...where,
+        });
+        return asRows(rows);
+      } catch {
+        return [];
+      }
+    }
+  }
+
+  /** تاریخچهٔ همهٔ پیام‌های ارسالی (پنل مدیر) */
+  async listAllAdminMessages(limit = 100): Promise<Record<string, unknown>[]> {
+    try {
+      const rows = await this.db.select<Record<string, unknown>>('admin_messages', {
+        select:
+          'id,user_id,telegram_id,title,body,kind,read_at,created_at,sender_telegram_id,sender_name,sent_via_bot',
+        order: 'created_at.desc',
+        limit: String(limit),
+      });
+      return asRows(rows);
+    } catch {
+      try {
+        const rows = await this.db.select<Record<string, unknown>>('admin_messages', {
+          select: 'id,user_id,telegram_id,title,body,kind,read_at,created_at',
+          order: 'created_at.desc',
+          limit: String(limit),
+        });
+        return asRows(rows);
+      } catch {
+        return [];
+      }
+    }
+  }
+
+  /** علامت‌گذاری پیام‌ها به‌عنوان خوانده‌شده */
+  async markMessagesRead(userId: string, ids?: string[]): Promise<void> {
+    const filter: Record<string, string> = { user_id: `eq.${userId}`, read_at: 'is.null' };
+    if (ids?.length) filter.id = `in.(${ids.join(',')})`;
+    try {
+      await this.db.update('admin_messages', filter, {
+        read_at: new Date().toISOString(),
+      });
+    } catch {
+      /* غیرحیاتی */
+    }
+  }
+
+  /** همهٔ کاربرانی که می‌توان به آن‌ها پیام همگانی فرستاد */
+  async listAllTelegramIds(): Promise<{ id: string; telegram_id: number; ui_language: string }[]> {
+    try {
+      const rows = await this.db.select<{ id: string; telegram_id: number; ui_language: string }>(
+        'users',
+        { select: 'id,telegram_id,ui_language', limit: '5000' }
+      );
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+}
+
+/** نرمال‌سازی خروجی Supabase (که می‌تواند T، T[] یا null باشد) */
+function asRows<T>(v: T[] | T | null | undefined): T[] {
+  if (Array.isArray(v)) return v;
+  return v ? [v] : [];
 }
 
 // ═════════════════════════════════════════════════════════════════════
 // Mappers: rows → API DTOs
 // ═════════════════════════════════════════════════════════════════════
 
+/** نگاشت ردیف پلن به DTO با محاسبهٔ قیمت نهایی (تخفیف‌خورده) */
+export function toPlanDto(r: PlanRow): Plan {
+  const priceIrr = Number(r.price_irr);
+  const discount = r.discount_percent ?? 0;
+  return {
+    id: r.id,
+    planType: r.plan_type,
+    titleFa: r.title_fa,
+    titleEn: r.title_en,
+    durationDays: r.duration_days,
+    priceIrr,
+    priceStars: r.price_stars,
+    discountPercent: discount,
+    finalPriceIrr: Math.round(priceIrr * (1 - discount / 100)),
+    finalPriceStars: Math.round(r.price_stars * (1 - discount / 100)),
+    badge: r.badge,
+    isActive: r.is_active,
+  };
+}
+
 export function toUserProfile(
   user: UserRow,
   subscription: SubscriptionRow | null,
-  opts: { isAdmin: boolean }
+  opts: { isAdmin: boolean; adminRole?: string | null }
 ): UserProfile {
   const subInfo: SubscriptionInfo | null = subscription
     ? {
@@ -941,6 +1679,9 @@ export function toUserProfile(
     uiLanguage: (user.ui_language ?? 'fa') as UserProfile['uiLanguage'],
     languageSource: user.language_source,
     targetLanguage: user.target_language as UserProfile['targetLanguage'],
+    // گویش و بودجهٔ روزانه — ممکن است ستون‌ها هنوز نباشند (اختیاری)
+    dialect: (user as { dialect?: string | null }).dialect ?? null,
+    dailyMinutes: (user as { daily_minutes?: number | null }).daily_minutes ?? null,
     skillLevel: user.skill_level as UserProfile['skillLevel'],
     learningGoal: user.learning_goal,
     onboardingDone: user.onboarding_done,
@@ -948,6 +1689,9 @@ export function toUserProfile(
     longestStreak: user.longest_streak,
     starsBalance: user.stars_balance,
     isAdmin: opts.isAdmin,
+    // نقش از env (SUPER_ADMIN) اولویت دارد؛ وگرنه نقش ذخیره‌شده در DB
+    adminRole:
+      opts.adminRole ?? (user as { admin_role?: string | null }).admin_role ?? null,
     createdAt: user.created_at,
     subscription: subInfo,
     hasAccess: access.hasAccess,
@@ -960,12 +1704,22 @@ export function toCycleDto(
 ): Cycle {
   const completedDays = lessons.filter((l) => l.is_completed).map((l) => l.day_number);
   const titles: Record<number, string> = {};
-  for (const l of lessons) titles[l.day_number] = l.title;
+  const objectives: Record<number, string> = {};
+  const objectivesFa: Record<number, string> = {};
+  for (const l of lessons) {
+    titles[l.day_number] = l.title;
+    const obj = l.objective ?? dayProfile(l.day_number).objective;
+    if (obj) objectives[l.day_number] = obj;
+    const objFa = l.objective_fa ?? dayProfile(l.day_number).objectiveFa;
+    if (objFa) objectivesFa[l.day_number] = objFa;
+  }
 
   const days = buildCycleDays({
     cycleStatus: cycle.status,
     completedDays,
     lessonTitles: titles,
+    objectives,
+    objectivesFa,
   });
 
   const currentDay = days.find((d) => d.isActive)?.dayNumber ?? null;

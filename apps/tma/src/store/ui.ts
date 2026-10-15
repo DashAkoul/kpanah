@@ -1,5 +1,11 @@
 import { create } from 'zustand';
 import type { SupportedUiLanguage } from '@kpanah/shared';
+import {
+  type ThemeMode,
+  readThemeMode,
+  persistThemeMode,
+  applyThemeMode,
+} from '../lib/theme';
 
 /**
  * UI-only state. Server data lives in React Query — mixing them in
@@ -32,6 +38,10 @@ interface UiState {
   uiLanguage: SupportedUiLanguage;
   setUiLanguage: (lang: SupportedUiLanguage) => void;
 
+  /** حالت تم: auto (پیش‌فرض = تلگرام) / light / dark */
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
+
   /** آیا راهنماهای inline دیده شده‌اند */
   hintsSeen: Record<string, boolean>;
   markHintSeen: (key: string) => void;
@@ -63,6 +73,21 @@ export const useUiStore = create<UiState>((set) => ({
   hintsSeen: {},
   markHintSeen: (key) =>
     set((state) => ({ hintsSeen: { ...state.hintsSeen, [key]: true } })),
+
+  themeMode: readThemeMode(),
+  setThemeMode: (themeMode) => {
+    persistThemeMode(themeMode);
+    set({ themeMode });
+
+    const wa = typeof window !== 'undefined' ? window.Telegram?.WebApp : undefined;
+    applyThemeMode(themeMode, wa?.colorScheme ?? null, wa?.themeParams ?? null);
+
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      const resolved = themeMode === 'auto' ? (wa?.colorScheme ?? 'light') : themeMode;
+      meta.setAttribute('content', resolved === 'dark' ? '#0f0f10' : '#ffffff');
+    }
+  },
 
   appLocked: false,
   lockReason: null,

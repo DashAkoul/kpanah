@@ -9,10 +9,11 @@ import type { CycleDay } from '@kpanah/shared';
  *   [7] ← [6] ← [5]
  */
 export function Roadmap({ days }: { days: CycleDay[] }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   const row1 = days.slice(0, 4);
   const row2 = days.slice(4, 7).reverse(); // 7, 6, 5
+  const activeDay = days.find((d) => d.isActive);
 
   return (
     <div className="space-y-3">
@@ -40,6 +41,23 @@ export function Roadmap({ days }: { days: CycleDay[] }) {
           total: days.length,
         })}
       </p>
+
+      {/* مرحلهٔ ۸ — هدف آموزشی روز فعال. یک خط کافی است؛ cram کردن در
+          نودهای مارپیچ خوانا نیست. */}
+      {activeDay && (
+        <p className="rounded-lg border border-border bg-card px-3 py-2 text-center text-[10px] leading-relaxed text-text-hint">
+          <span className="font-semibold text-accent">
+            {t(`learn.phase.${activeDay.phase ?? 'TEACH'}`, {
+              defaultValue: `Day ${activeDay.dayNumber}`,
+            })}
+          </span>
+          {` — ${
+            i18n.language === 'fa'
+              ? (activeDay.objectiveFa ?? activeDay.objective)
+              : activeDay.objective
+          }`}
+        </p>
+      )}
     </div>
   );
 }

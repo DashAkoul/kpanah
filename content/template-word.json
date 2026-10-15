@@ -1,0 +1,38 @@
+{
+  "_readme": [
+    "قالب محتوای از پیش آماده برای content_cache.",
+    "هر آیتم یک «تکه» محتوای ثابت است که AI فقط رویش شخصی‌سازی می‌کند.",
+    "",
+    "kind:     WORD | PATTERN | EXERCISE | DIALOGUE | PLACEMENT_Q",
+    "language: کد زبان (en, de, fr, …)",
+    "level:    ZERO | A1 | A2 | B1 | B2 | C1",
+    "topic:    موضوع آزاد (travel, business, food, …)",
+    "items:    آرایهٔ آیتم‌های همان kind",
+    "",
+    "cache_key به‌صورت خودکار ساخته می‌شود: <language>:<level>:<topic>",
+    "اسکریپت import: node tools/import-content.mjs content/english.json"
+  ],
+
+  "kind": "WORD",
+  "language": "en",
+  "level": "A1",
+  "topic": "travel",
+  "items": [
+    {
+      "term": "airport",
+      "meaning": "فرودگاه",
+      "pronunciation": "/ˈeəpɔːt/",
+      "example": "We arrived at the airport early.",
+      "exampleTranslation": "زود به فرودگاه رسیدیم.",
+      "tags": ["travel", "noun"]
+    },
+    {
+      "term": "boarding pass",
+      "meaning": "کارت پرواز",
+      "pronunciation": "/ˈbɔːdɪŋ pɑːs/",
+      "example": "Show your boarding pass at the gate.",
+      "exampleTranslation": "کارت پروازت را دم گیت نشان بده.",
+      "tags": ["travel", "noun"]
+    }
+  ]
+}

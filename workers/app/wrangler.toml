@@ -1,0 +1,24 @@
+name = "kpanah-lang-app"
+compatibility_date = "2024-09-23"
+
+# ─────────────────────────────────────────────────────────────────────
+#  Frontend hosting Worker — serves the built Mini App as static assets.
+#
+#  Why a Worker instead of Cloudflare Pages?
+#    • Custom Domain روی Worker خودش رکورد DNS را می‌سازد و درست مدیریت
+#      می‌کند؛ روی Pages (وقتی از API ساخته شود) این‌طور نیست.
+#
+#  ⚠️ نکته‌ها:
+#    ۱. کلید `routes` باید *قبل* از هدر `[assets]` بیاید.
+#    ۲. `directory` باید به مسیری اشاره کند که gitignore نشده باشد
+#       (وگرنه Wrangler هیچ فایلی آپلود نمی‌کند). اسکریپت deploy ابتدا
+#       بیلد را به ./public کپی می‌کند.
+# ─────────────────────────────────────────────────────────────────────
+
+routes = [
+  { pattern = "app.infolange.kdns.fr", custom_domain = true }
+]
+
+[assets]
+directory = "public"
+not_found_handling = "single-page-application"

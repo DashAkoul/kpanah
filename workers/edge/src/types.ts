@@ -19,6 +19,13 @@ export interface Env {
   QSTASH_NEXT_SIGNING_KEY?: string;
   /** آدرس خود Worker برای callback های QStash */
   SELF_URL?: string;
+  /**
+   * آیا از QStash برای کارهای پس‌زمینه استفاده شود؟ پیش‌فرض `false` —
+   * مسیر درون‌Worker (`waitUntil`) پایدارتر است و به QStash وابسته نیست.
+   */
+  USE_QSTASH?: string;
+  /** بودجهٔ زمانی تولید پس‌زمینهٔ دروس (میلی‌ثانیه) */
+  BACKGROUND_BUDGET_MS?: string;
 
   // AI
   GEMINI_API_KEY?: string;
@@ -26,6 +33,11 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   AI_PRIMARY_MODEL?: string;
   AI_FALLBACK_MODELS?: string;
+  /**
+   * تولید ماژولار دروس: ابتدا «نقشهٔ» چرخه، بعد محتوای روز ۱، و بقیه در
+   * پس‌زمینه. مقدار `'false'` آن را خاموش می‌کند (تولید کامل ۷ روزه).
+   */
+  MODULAR_GENERATION?: string;
 
   /**
    * Master secret for encrypting AI provider keys that admins enter through
@@ -52,6 +64,17 @@ export interface Env {
   // KV / DO
   RATE_LIMIT_KV?: KVNamespace;
   CACHE_KV?: KVNamespace;
+
+  // Queues (تولید پس‌زمینه) — اختیاری؛ اگر binding نباشد fallback اجرا می‌شود
+  GENERATION_QUEUE?: {
+    send(message: unknown): Promise<void>;
+  };
+
+  // Workflows (تولید durable چرخه) — اختیاری
+  CYCLE_WORKFLOW?: {
+    create(params: unknown): Promise<{ id: string }>;
+    get(id: string): Promise<{ status(): Promise<unknown> }>;
+  };
 }
 
 /**
@@ -78,6 +101,8 @@ export interface RequestContext {
   claims?: AuthClaims;
   telegramId?: number;
   userId?: string;
+  /** نقش ادمین (در صورت احراز دسترسی ADMIN) — برای RBAC */
+  adminRole?: 'SUPER_ADMIN' | 'SUPPORT' | 'MARKETING' | 'FINANCE';
   /**
    * از ExecutionContext به ارث می‌رسد. برای کارهای پس‌زمینه‌ای که
    * نباید پاسخ کاربر را معطل کنند (پردازش تلگرام، تولید چرخه، ...).

@@ -96,7 +96,7 @@ const GATE_PATH = import.meta.env.VITE_GATE_PATH ?? '/kpanah56/8fjg7rfb/v1/gate'
  */
 const API_BASE =
   (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '') ||
-  'https://kpanah-lang-edge.language-app-backend.workers.dev';
+  'https://api.infolange.kdns.fr';
 
 // برای صفحهٔ عیب‌یابی `/debug.html` — مقدار واقعی API_BASE را روی window
 // می‌گذاریم تا بتوانیم از داخل مینی‌اپ واقعی هم آن را ببینیم.
@@ -418,6 +418,87 @@ export const api = {
   deleteAccount: () =>
     callApi<{ deleted: boolean }>('delete-account', { method: 'POST', body: {} }),
 
+  // ── پشتیبانی (تیکت) ──────────────────────────────────────────────
+  supportCreate: (body: { subject: string; body: string; category: string }) =>
+    callApi<{ ticket: unknown }>('support-create', { method: 'POST', body }),
+
+  supportList: () => callApi<{ tickets: unknown[] }>('support-list'),
+
+  // ⚠️ ticketId باید به‌صورت query param برود. قبلاً به شکل
+  // `action=support-thread&ticketId=…` ساخته می‌شد و چون `action` کلید
+  // encode می‌شد، سرور اکشن را نمی‌شناخت → 404 → «تیکت باز نمی‌شد».
+  supportThread: (ticketId: string) =>
+    callApiWithQuery<{ ticket: unknown; messages: unknown[] }>(
+      'support-thread',
+      new URLSearchParams({ ticketId })
+    ),
+
+  supportReply: (ticketId: string, body: string) =>
+    callApi<{ ok: boolean }>('support-reply', {
+      method: 'POST',
+      body: { ticketId, body },
+    }),
+
+  supportClose: (ticketId: string) =>
+    callApi<{ ok: boolean }>('support-close', {
+      method: 'POST',
+      body: { ticketId },
+    }),
+
+  // ── پشتیبانی (ادمین) ─────────────────────────────────────────────
+  adminSupportList: () => callApi<{ tickets: unknown[] }>('admin-support-list'),
+
+  adminSupportThread: (ticketId: string) =>
+    callApiWithQuery<{ ticket: unknown; messages: unknown[] }>(
+      'admin-support-thread',
+      new URLSearchParams({ ticketId })
+    ),
+
+  adminSupportReply: (ticketId: string, body: string) =>
+    callApi<{ ok: boolean }>('admin-support-reply', {
+      method: 'POST',
+      body: { ticketId, body },
+    }),
+
+  // ── نقش‌های ادمین (RBAC) ─────────────────────────────────────────
+  adminListAdmins: () => callApi<{ admins: unknown[]; roles: string[] }>('admin-list-admins'),
+
+  adminSetRole: (telegramId: number, role: string | null, title?: string | null) =>
+    callApi<{ ok: boolean }>('admin-set-role', {
+      method: 'POST',
+      body: { telegramId, role, title },
+    }),
+
+  adminMessageSend: (body: {
+    telegramId?: number | null;
+    broadcast?: boolean;
+    title?: string;
+    body: string;
+    kind?: string;
+    sendViaBot?: boolean;
+  }) => callApi<{ ok: boolean; sent: number }>('admin-message-send', { method: 'POST', body }),
+
+  /** تاریخچهٔ همهٔ پیام‌های ارسالی (با نام ادمین فرستنده) */
+  adminMessagesList: () => callApi<{ messages: unknown[] }>('admin-messages-list'),
+
+  // ── پیام‌های مدیر به کاربر ───────────────────────────────────────
+  messagesList: () => callApi<{ messages: unknown[] }>('messages-list'),
+
+  messagesRead: (ids?: string[]) =>
+    callApi<{ ok: boolean }>('messages-read', { method: 'POST', body: { ids } }),
+
+  // ── CRUD اشتراک‌ها (پنل مدیر) ────────────────────────────────────
+  adminPlans: () => callApi<{ plans: unknown[] }>('admin-plans'),
+
+  adminPlanCreate: (body: unknown) =>
+    callApi<unknown>('admin-plan-create', { method: 'POST', body }),
+
+  adminPlanUpdate: (body: unknown) =>
+    callApi<unknown>('admin-plan-update', { method: 'POST', body }),
+
+  adminPlanDelete: (id: string) =>
+    callApi<{ deleted: boolean }>('admin-plan-delete', { method: 'POST', body: { id } }),
+
   createInvoice: (planId: string) =>
     callApi<{ invoiceLink: string; amountStars: number }>('create-invoice', {
       method: 'POST',
@@ -483,6 +564,25 @@ export const api = {
       new URLSearchParams({ id }),
       { method: 'POST' }
     ),
+
+  /** تست کلید + دریافت فهرست مدل‌های قابل‌استفاده (منوی کشویی مدل) */
+  adminAiProviderModels: (body: {
+    id?: string;
+    protocol?: string;
+    vendor?: string;
+    baseUrl?: string | null;
+    apiKey?: string;
+  }) =>
+    body.id
+      ? callApiWithQuery<{ ok: boolean; models: string[]; error?: string }>(
+          'admin-ai-provider-models',
+          new URLSearchParams({ id: body.id }),
+          { method: 'POST' }
+        )
+      : callApi<{ ok: boolean; models: string[]; error?: string }>(
+          'admin-ai-provider-models',
+          { method: 'POST', body }
+        ),
 };
 
 /** variant که query string اضافه می‌کند */

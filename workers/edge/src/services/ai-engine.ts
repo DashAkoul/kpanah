@@ -1,9 +1,17 @@
+import type { z } from 'zod';
 import {
   generatedCycleSchema,
+  generatedLessonSchema,
+  cycleOutlineSchema,
   validateWithDetail,
   CYCLE_SCHEDULE,
+  DAY_PROFILES,
+  dayProfile,
   type CycleGenerationInput,
   type GeneratedCycle,
+  type GeneratedLesson,
+  type CycleOutline,
+  type OutlineDay,
 } from '@kpanah/shared';
 import type { Env } from '../types';
 import { resolveProviderKey, FROM_ENV_MARKER } from '../lib/provider-vault';
@@ -97,9 +105,23 @@ export class AiEngine {
     const userPrompt = buildUserPrompt(input);
     const jsonSchema = buildJsonSchema();
 
+    // ⚠️ سقف زمانی: این تابع ممکن است داخل یک درخواست کاربر اجرا شود.
+    // بدون این سقف، با چند provider خراب، درخواست دقیقه‌ها معلق می‌ماند.
+    const deadlineMs = 60_000;
+
     for (const provider of this.providers) {
+      if (Date.now() - started > deadlineMs) break;
+
+      // ⚠️ سقف توکن برای مسیر قدیمی (کل ۷ درس در یک پاسخ): از مقدار
+      // تنظیم‌شدهٔ provider در پنل ادمین بزرگ‌تر نمی‌رویم (وگرنه مدل‌هایی
+      // مثل `gemini-3.5-flash-lite` با سقف ۸۱۹۲ خطای ۴۰۰ «invalid
+      // argument» می‌دهند). فقط وقتی کسی مقداری ست نکرده، ۱۶k پیش‌فرض.
+      const maxOutputTokens = Math.min(32_768, provider.maxOutputTokens ?? 16_384);
+
       // ── Attempt 1 ────────────────────────────────────────────────
-      const first = await this.attempt(provider, systemPrompt, userPrompt, jsonSchema, 'initial');
+      const first = await this.attempt(
+        provider, systemPrompt, userPrompt, jsonSchema, 'initial', maxOutputTokens
+      );
       attempts.push(first.attempt);
       if (first.cycle) {
         return {
@@ -110,9 +132,13 @@ export class AiEngine {
         };
       }
 
+      if (Date.now() - started > deadlineMs) break;
+
       // ── Attempt 2: repair round-trip with exact errors ───────────
       const repairPrompt = buildRepairPrompt(userPrompt, first.errors ?? []);
-      const second = await this.attempt(provider, systemPrompt, repairPrompt, jsonSchema, 'repair');
+      const second = await this.attempt(
+        provider, systemPrompt, repairPrompt, jsonSchema, 'repair', maxOutputTokens
+      );
       attempts.push(second.attempt);
       if (second.cycle) {
         return {
@@ -128,6 +154,157 @@ export class AiEngine {
   }
 
   // ───────────────────────────────────────────────────────────────────
+  // Public: modular generation (outline → day 1 → rest in background)
+  //
+  // تولید ماژولار: اول «نقشهٔ» چرخه ساخته می‌شود (کوچک و ارزان)، بعد محتوای
+  // روز ۱ تولید می‌شود تا کاربر فوراً درس بخواند، و بقیهٔ روزها در پس‌زمینه
+  // پر می‌شوند. مزیت: کاربر انتظار طولانی نمی‌کشد + هر بخش کوچک‌تر است و
+  // retry ارزان‌تر می‌شود.
+  // ───────────────────────────────────────────────────────────────────
+
+  async generateOutline(input: CycleGenerationInput): Promise<{
+    outline: CycleOutline | null;
+    attempts: AiAttempt[];
+    model: string;
+    totalMs: number;
+  }> {
+    const r = await this.runChain(
+      cycleOutlineSchema,
+      buildOutlineSystemPrompt(input),
+      buildOutlineUserPrompt(input),
+      'outline'
+    );
+    return { outline: r.value, attempts: r.attempts, model: r.model, totalMs: r.totalMs };
+  }
+
+  async generateLesson(
+    input: CycleGenerationInput,
+    day: OutlineDay,
+    outline: CycleOutline
+  ): Promise<{
+    lesson: GeneratedLesson | null;
+    attempts: AiAttempt[];
+    model: string;
+    totalMs: number;
+  }> {
+    const r = await this.runChain(
+      generatedLessonSchema,
+      buildLessonSystemPrompt(input),
+      buildLessonUserPrompt(input, day, outline),
+      `lesson-${day.dayNumber}`
+    );
+    return { lesson: r.value, attempts: r.attempts, model: r.model, totalMs: r.totalMs };
+  }
+
+  /**
+   * حلقهٔ failover عمومی: هر provider را با یک درخواست اولیه و یک درخواست
+   * «تعمیر» (با خطاهای دقیق) امتحان می‌کند.
+   */
+  private async runChain<T>(
+    schema: z.ZodType<T>,
+    systemPrompt: string,
+    userPrompt: string,
+    tag: string
+  ): Promise<{ value: T | null; attempts: AiAttempt[]; model: string; totalMs: number }> {
+    const started = Date.now();
+    const attempts: AiAttempt[] = [];
+    const jsonSchema = buildJsonSchema();
+
+    // ⚠️ سقف زمان و تعداد provider برای این مسیر.
+    // این فراخوانی داخل یک درخواست کاربر اجرا می‌شود (نه پس‌زمینه)، پس نباید
+    // دقیقه‌ها طول بکشد. با بودجهٔ ۴۵ ثانیه و ۲ provider، بدترین حالت
+    // ~۶۰ ثانیه است و بعد درخواست آزاد می‌شود (چرخه FAILED می‌شود تا UI
+    // دکمهٔ تلاش مجدد نشان دهد).
+    const deadlineMs = 45_000;
+    const maxProviders = 2;
+
+    for (const provider of this.providers.slice(0, maxProviders)) {
+      if (Date.now() - started > deadlineMs) break;
+
+      const first = await this.attemptFor(provider, schema, systemPrompt, userPrompt, jsonSchema);
+      attempts.push(first.attempt);
+      if (first.value !== null) {
+        return {
+          value: first.value,
+          attempts,
+          model: `${provider.vendor}:${provider.model}:${tag}`,
+          totalMs: Date.now() - started,
+        };
+      }
+
+      if (Date.now() - started > deadlineMs) break;
+
+      const repair = buildRepairPrompt(userPrompt, first.errors ?? []);
+      const second = await this.attemptFor(provider, schema, systemPrompt, repair, jsonSchema);
+      attempts.push(second.attempt);
+      if (second.value !== null) {
+        return {
+          value: second.value,
+          attempts,
+          model: `${provider.vendor}:${provider.model}:${tag}:repaired`,
+          totalMs: Date.now() - started,
+        };
+      }
+    }
+
+    return { value: null, attempts, model: 'none', totalMs: Date.now() - started };
+  }
+
+  /** یک تلاش با اسکیمای دلخواه (معادل `attempt` برای اسکیماهای ماژولار) */
+  private async attemptFor<T>(
+    provider: ResolvedProvider,
+    schema: z.ZodType<T>,
+    systemPrompt: string,
+    userPrompt: string,
+    jsonSchema: unknown
+  ): Promise<{ value: T | null; errors?: string[]; attempt: AiAttempt }> {
+    const t0 = Date.now();
+    const base = { provider: provider.label, providerId: provider.id, model: provider.model };
+
+    try {
+      const { text, tokensUsed } = await this.callProvider(
+        provider,
+        systemPrompt,
+        userPrompt,
+        jsonSchema
+      );
+      const parsed = extractJson(text);
+      if (parsed === null) {
+        return {
+          value: null,
+          errors: ['Response was not valid JSON. Return ONLY the JSON object.'],
+          attempt: { ...base, ok: false, ms: Date.now() - t0, error: 'invalid_json', tokensUsed },
+        };
+      }
+      const validation = validateWithDetail(schema, parsed);
+      if (!validation.success) {
+        return {
+          value: null,
+          errors: validation.errors,
+          attempt: {
+            ...base,
+            ok: false,
+            ms: Date.now() - t0,
+            error: `schema: ${validation.errors?.[0] ?? ''}`.slice(0, 200),
+            tokensUsed,
+          },
+        };
+      }
+      return {
+        value: validation.data!,
+        attempt: { ...base, ok: true, ms: Date.now() - t0, tokensUsed },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        value: null,
+        errors: [`Provider error: ${message}`],
+        attempt: { ...base, ok: false, ms: Date.now() - t0, error: message.slice(0, 200) },
+      };
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────
   // Single provider attempt + validation
   // ───────────────────────────────────────────────────────────────────
 
@@ -136,7 +313,8 @@ export class AiEngine {
     systemPrompt: string,
     userPrompt: string,
     jsonSchema: unknown,
-    phase: 'initial' | 'repair'
+    phase: 'initial' | 'repair',
+    maxOutputTokens?: number
   ): Promise<{ cycle: GeneratedCycle | null; errors?: string[]; attempt: AiAttempt }> {
     const t0 = Date.now();
     const base = {
@@ -150,7 +328,8 @@ export class AiEngine {
         provider,
         systemPrompt,
         userPrompt,
-        jsonSchema
+        jsonSchema,
+        maxOutputTokens
       );
 
       const parsed = extractJson(text);
@@ -201,15 +380,25 @@ export class AiEngine {
     provider: ResolvedProvider,
     systemPrompt: string,
     userPrompt: string,
-    jsonSchema: unknown
+    jsonSchema: unknown,
+    /**
+     * سقف توکن خروجی.
+     *
+     * ⚠️ چرا جدا از provider.maxOutputTokens: مسیر «چرخهٔ کامل» (legacy
+     * fallback) همهٔ ۷ درس را در **یک** پاسخ می‌خواهد و نیاز به ۳۰k+ توکن
+     * دارد. قبلاً سقف مشترک ۱۶k بود → پاسخ بریده می‌شد → خطای schema
+     * («title: Required» / «part1.type: Invalid literal value»).
+     * مسیر ماژولار (outline + تک‌درس) کوچک است و سقف محافظه می‌خواهد.
+     */
+    maxOutputTokens?: number
   ): Promise<{ text: string; tokensUsed?: number }> {
     switch (provider.protocol) {
       case 'gemini':
-        return this.callGemini(provider, systemPrompt, userPrompt, jsonSchema);
+        return this.callGemini(provider, systemPrompt, userPrompt, jsonSchema, maxOutputTokens);
       case 'openai_compatible':
-        return this.callOpenAiCompatible(provider, systemPrompt, userPrompt);
+        return this.callOpenAiCompatible(provider, systemPrompt, userPrompt, maxOutputTokens);
       case 'anthropic':
-        return this.callAnthropic(provider, systemPrompt, userPrompt);
+        return this.callAnthropic(provider, systemPrompt, userPrompt, maxOutputTokens);
       default: {
         // Exhaustiveness guard: adding a protocol without handling it here
         // becomes a compile error rather than a silent runtime skip.
@@ -227,7 +416,8 @@ export class AiEngine {
     provider: ResolvedProvider,
     systemPrompt: string,
     userPrompt: string,
-    jsonSchema: unknown
+    jsonSchema: unknown,
+    maxOutputTokens?: number
   ): Promise<{ text: string; tokensUsed?: number }> {
     const base = provider.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     const url = `${base.replace(/\/$/, '')}/models/${provider.model}:generateContent`;
@@ -235,7 +425,9 @@ export class AiEngine {
     const generationConfig: Record<string, unknown> = {
       temperature: provider.temperature ?? 0.8,
       topP: 0.95,
-      maxOutputTokens: provider.maxOutputTokens ?? 32_768,
+      // پیش‌فرض محافظه‌کارانه (مسیر ماژولار)؛ اگر فراخوان سقف بزرگ‌تر
+      // بدهد (مثل چرخهٔ کامل) همان اعمال می‌شود.
+      maxOutputTokens: maxOutputTokens ?? Math.min(provider.maxOutputTokens ?? 8192, 16_384),
     };
     if (provider.supportsJsonSchema) {
       generationConfig.responseMimeType = 'application/json';
@@ -256,15 +448,13 @@ export class AiEngine {
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
           generationConfig,
-          safetySettings: [
-            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
-            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
-            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' },
-            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
-          ],
+          // ⚠️ عمداً `safetySettings` فرستاده نمی‌شود. نام دسته‌های قدیمی
+          // (HARM_CATEGORY_*) در نسخه‌های جدید API باعث خطای ۴۰۰
+          // «Request contains an invalid argument» می‌شود. پیش‌فرض‌های
+          // Gemini کافی‌اند.
         }),
       },
-      90_000
+      30_000
     );
 
     if (!res.ok) {
@@ -290,7 +480,8 @@ export class AiEngine {
   private async callOpenAiCompatible(
     provider: ResolvedProvider,
     systemPrompt: string,
-    userPrompt: string
+    userPrompt: string,
+    maxOutputTokens?: number
   ): Promise<{ text: string; tokensUsed?: number }> {
     // DeepSeek's documented endpoint; any other OpenAI-shaped gateway must
     // supply its own base_url through the admin panel.
@@ -312,11 +503,11 @@ export class AiEngine {
             { role: 'user', content: userPrompt },
           ],
           temperature: provider.temperature ?? 0.8,
-          max_tokens: provider.maxOutputTokens ?? 8192,
+          max_tokens: maxOutputTokens ?? provider.maxOutputTokens ?? 8192,
           response_format: { type: 'json_object' },
         }),
       },
-      90_000
+      30_000
     );
 
     if (!res.ok) {
@@ -339,7 +530,8 @@ export class AiEngine {
   private async callAnthropic(
     provider: ResolvedProvider,
     systemPrompt: string,
-    userPrompt: string
+    userPrompt: string,
+    maxOutputTokens?: number
   ): Promise<{ text: string; tokensUsed?: number }> {
     const base = provider.baseUrl ?? 'https://api.anthropic.com';
     const url = `${base.replace(/\/$/, '')}/v1/messages`;
@@ -355,7 +547,7 @@ export class AiEngine {
         },
         body: JSON.stringify({
           model: provider.model,
-          max_tokens: provider.maxOutputTokens ?? 8192,
+          max_tokens: maxOutputTokens ?? provider.maxOutputTokens ?? 8192,
           temperature: provider.temperature ?? 0.8,
           system: systemPrompt,
           messages: [
@@ -366,7 +558,7 @@ export class AiEngine {
           ],
         }),
       },
-      90_000
+      30_000
     );
 
     if (!res.ok) {
@@ -594,9 +786,144 @@ function buildRepairPrompt(originalPrompt: string, errors: string[]): string {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Gemini responseSchema (OpenAPI 3.0 subset)
+// Prompts — تولید ماژولار (outline / تک‌درس)
 // ═════════════════════════════════════════════════════════════════════
 
+/** چارچوب مشترک آموزشی — بین outline و درس استفاده می‌شود */
+function pedagogyBlock(input: CycleGenerationInput): string {
+  return [
+    `Learner's native/UI language: ${input.user.uiLanguage}. Language being taught: ${input.user.targetLanguage}.`,
+    `Skill level: ${input.user.skillLevel}. Goal: ${input.user.learningGoal ?? 'general fluency'}.`,
+    ``,
+    `PEDAGOGY — follow exactly:`,
+    `- Days 1-5 are TEACHING. Part 1 = pattern-first induction using Substitution Drills.`,
+    `  NEVER state grammar rules as formulas. Instead give a base sentence and interchangeable`,
+    `  slots so the learner induces the pattern themselves.`,
+    `  Part 2 = REAL_APPLICATION: the same pattern in a concrete real-world scenario.`,
+    `- Day 6 is HIDDEN_ASSESSMENT. It MUST look and feel like a normal teaching day.`,
+    `  Do NOT mention testing, exams, scores, or evaluation anywhere in user-visible text.`,
+    `- Day 7 is CONSOLIDATION. Revisit ONLY the learner's weak terms with NEW examples`,
+    `  (never repeat the original example sentence). End with encouragement.`,
+    ``,
+    `LANGUAGE RULES:`,
+    `- "meaning", "explanation", "scenario", "prompt" and translations are written in ${input.user.uiLanguage}.`,
+    `- "term", "example", "options" content to be learned is in ${input.user.targetLanguage}.`,
+    `- "title" is in ${input.user.targetLanguage}; "titleFa" is the same idea rendered in ${input.user.uiLanguage}.`,
+  ].join('\n');
+}
+
+/** خلاصهٔ عملکرد کاربر (delta) — برای شخصی‌سازی */
+function deltaBlock(input: CycleGenerationInput): string {
+  const d = input.delta;
+  const lines: string[] = [];
+  lines.push(`PERFORMANCE SNAPSHOT: answers ${d.totalAnswers}, accuracy ${d.accuracyPct}%, avg ${d.averageResponseMs}ms.`);
+  if (d.accuracyPct < 60) lines.push('CALIBRATION: accuracy < 60% → smaller vocabulary per day, more repetition, shorter sentences.');
+  if (d.accuracyPct > 90) lines.push('CALIBRATION: accuracy > 90% and fast → push complexity up a notch.');
+  if (d.weakTerms.length > 0) {
+    lines.push(`WEAK TERMS (must be recycled): ${d.weakTerms.slice(0, 25).map((w) => `${w.term} (box ${w.box})`).join(', ')}`);
+  }
+  if (d.masteredTerms.length > 0) {
+    lines.push(`MASTERED (scaffold only, do not re-teach): ${d.masteredTerms.slice(0, 30).join(', ')}`);
+  }
+  if (d.weakestAreas.length > 0) lines.push(`WEAKEST AREAS: ${d.weakestAreas.join(', ')}`);
+  if (input.previousCycleSummary) {
+    lines.push(`PREVIOUS CYCLE (do not duplicate): ${input.previousCycleSummary}`);
+  }
+  return lines.join('\n');
+}
+
+function buildOutlineSystemPrompt(input: CycleGenerationInput): string {
+  return [
+    `You are an expert adaptive language tutor. You are planning (NOT writing) a 7-day micro-cycle.`,
+    ``,
+    pedagogyBlock(input),
+    ``,
+    `TASK: produce the cycle OUTLINE only — a title, a one-paragraph focus summary,`,
+    `and for each of the 7 days: a short title, its kind, and a one-sentence objective.`,
+    `Kinds MUST be: days 1-5 = TEACHING, day 6 = HIDDEN_ASSESSMENT, day 7 = CONSOLIDATION.`,
+    `Titles must be concrete and distinct (no two days about the same sub-skill).`,
+    ``,
+    `THE ARC — days 1-5 are NOT interchangeable. Each teaches a different skill stage:`,
+    ...Object.entries(DAY_PROFILES)
+      .slice(0, 5)
+      .map(
+        ([n, p]) =>
+          `  Day ${n} = ${p.phase}: ${p.objective} → toward: ${p.emphasis}`
+      ),
+    `  Day 6 = ASSESS (hidden — looks like a normal teaching day).`,
+    `  Day 7 = CONSOLIDATE (weak terms only, brand-new examples).`,
+    ``,
+    `Write each day's objective as a concrete micro-goal in one sentence (not a restatement of the title).`,
+    `Objectives must show the progression: what the learner can DO after that day that they could not do before.`,
+    ``,
+    `Output ONE JSON object matching the provided schema. No markdown, no commentary.`,
+  ].join('\n');
+}
+
+function buildOutlineUserPrompt(input: CycleGenerationInput): string {
+  return [
+    `Plan cycle #${input.cycleNumber}.`,
+    '',
+    deltaBlock(input),
+    '',
+    `Return: title, titleFa, focusSummary, and days[] with exactly 7 entries (dayNumber 1..7).`,
+    `Each day needs: title, titleFa, kind, objective, objectiveFa.`,
+  ].join('\n');
+}
+
+function buildLessonSystemPrompt(input: CycleGenerationInput): string {
+  return [
+    `You are an expert adaptive language tutor writing ONE day of an existing 7-day cycle.`,
+    ``,
+    pedagogyBlock(input),
+    ``,
+    `The cycle outline is already fixed — stay consistent with it and do not change its topic.`,
+    `Write ONLY the requested day.`,
+    ``,
+    `Output ONE JSON object matching the provided schema. No markdown, no commentary.`,
+  ].join('\n');
+}
+
+function buildLessonUserPrompt(
+  input: CycleGenerationInput,
+  day: OutlineDay,
+  outline: CycleOutline
+): string {
+  // پروفایل روز (با fallback برای چرخه‌های قدیمی/کش‌شده)
+  const profile = dayProfile(day.dayNumber);
+  const objective = day.objective ?? profile.objective;
+
+  return [
+    `Cycle: ${outline.title} — ${outline.focusSummary}`,
+    `Full outline: ${outline.days.map((d) => `D${d.dayNumber}(${d.kind}) ${d.title}`).join(' | ')}`,
+    '',
+    `NOW WRITE DAY ${day.dayNumber}: "${day.title}" (kind ${day.kind}).`,
+    `Day objective: ${objective}`,
+    `Day phase: ${profile.phase} — ${profile.emphasis}`,
+    '',
+    deltaBlock(input),
+    '',
+    `Content budget for this day (do not exceed):`,
+    `- part1 items: ${profile.items.min}-${profile.items.max}`,
+    `- part2 questions: ${profile.part2.min}-${profile.part2.max}`,
+    `- share of items that must be BRAND NEW: ${Math.round(profile.newItemRatio * 100)}%`,
+    `- the rest must REVIEW items from earlier days of this cycle.`,
+    '',
+    `Rules for this day:`,
+    `- part1: PATTERN_DRILL with 3-8 items (term, meaning, pronunciation, example, exampleTranslation, substitution).`,
+    day.kind === 'CONSOLIDATION'
+      ? `- This is CONSOLIDATION: reuse ONLY weak terms with NEW example sentences; never repeat an old example.`
+      : day.kind === 'HIDDEN_ASSESSMENT'
+        ? `- This is HIDDEN_ASSESSMENT but must look like a normal teaching day. Never mention tests/scores.`
+        : `- part2: REAL_APPLICATION with 2-6 questions in a concrete scenario.`,
+    `- dayNumber MUST be ${day.dayNumber}, kind MUST be ${day.kind}.`,
+    `- title/titleFa should match the outline: "${day.title}".`,
+  ].join('\n');
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Gemini responseSchema (OpenAPI 3.0 subset)
+// ═════════════════════════════════════════════════════════════════════
 function buildJsonSchema(): Record<string, unknown> {
   const str = (description?: string) => ({ type: 'string', ...(description ? { description } : {}) });
 

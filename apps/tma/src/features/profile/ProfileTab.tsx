@@ -1,12 +1,17 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
 import { Card, Button, Chip, ProgressBar } from '../../components/ui';
+import { FREE_TRIAL_DAYS } from '@kpanah/shared';
 import { ProgressPanel } from './ProgressPanel';
 import { StorePanel } from '../store/StorePanel';
+import { SupportPanel } from '../support/SupportPanel';
+import { MessagesInbox } from './MessagesInbox';
 import { useSessionStore } from '../../store/session';
 import { AdminPanel } from '../admin/AdminPanel';
+import { api } from '../../lib/api';
 
-type SubView = 'overview' | 'store' | 'admin';
+type SubView = 'overview' | 'store' | 'messages' | 'support' | 'admin';
 
 /**
  * Profile & Store tab — combines identity, stats, and the store,
@@ -16,6 +21,15 @@ export function ProfileTab() {
   const { t } = useTranslation();
   const user = useSessionStore((s) => s.user);
   const [view, setView] = useState<SubView>('overview');
+
+  // تعداد پیام‌های خوانده‌نشده — از همان کشِ بنر استفاده می‌کند
+  const { data: msgData } = useQuery({
+    queryKey: ['messages-list'],
+    queryFn: async () => (await api.messagesList()) as { messages: { read_at: string | null }[] },
+    enabled: Boolean(user),
+    staleTime: 30_000,
+  });
+  const unreadCount = (msgData?.messages ?? []).filter((m) => !m.read_at).length;
 
   if (!user) return null;
 
@@ -92,10 +106,28 @@ export function ProfileTab() {
                     : t('profile.sourceStars')}
               </p>
             </>
+          ) : user.hasAccess ? (
+            // کاربر در دورهٔ آزمایشی است (بدون ردیف اشتراک)
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-text-hint">
+                  {t('profile.trialActive')}
+                </span>
+                {trialDaysRemaining(user.createdAt) > 0 && (
+                  <Chip tone={trialDaysRemaining(user.createdAt) <= 3 ? 'warning' : 'success'}>
+                    {t('profile.expiresIn', { count: trialDaysRemaining(user.createdAt) })}
+                  </Chip>
+                )}
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
+                {t('profile.trialHint')}
+              </p>
+            </>
           ) : (
+            // اشتراک کاربر منقضی شده است
             <div className="flex items-center justify-between">
               <span className="text-xs text-text-hint">{t('profile.noSubscription')}</span>
-              <Chip tone="danger">Expired</Chip>
+              <Chip tone="danger">{t('profile.expired')}</Chip>
             </div>
           )}
 
@@ -113,12 +145,23 @@ export function ProfileTab() {
       </Card>
 
       {/* Sub-view switcher */}
-      <div className="flex gap-1.5 rounded-xl bg-[var(--surface-sunken)] p-1">
+      <div className="flex gap-1 overflow-x-auto rounded-xl bg-[var(--surface-sunken)] p-1">
         <SubTab active={view === 'overview'} onClick={() => setView('overview')}>
           📊 {t('profile.stats')}
         </SubTab>
         <SubTab active={view === 'store'} onClick={() => setView('store')}>
           🛒 {t('profile.store')}
+        </SubTab>
+        <SubTab active={view === 'messages'} onClick={() => setView('messages')}>
+          ✉️ {t('messages.title')}
+          {unreadCount > 0 && (
+            <span className="ms-1 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold text-accent-text">
+              {unreadCount}
+            </span>
+          )}
+        </SubTab>
+        <SubTab active={view === 'support'} onClick={() => setView('support')}>
+          💬 {t('support.tab')}
         </SubTab>
         {user.isAdmin && (
           <SubTab active={view === 'admin'} onClick={() => setView('admin')}>
@@ -129,6 +172,8 @@ export function ProfileTab() {
 
       {view === 'overview' && <ProgressPanel />}
       {view === 'store' && <StorePanel />}
+      {view === 'messages' && <MessagesInbox />}
+      {view === 'support' && <SupportPanel />}
       {view === 'admin' && user.isAdmin && <AdminPanel />}
     </div>
   );
@@ -168,4 +213,12 @@ function planDays(planType: string): number {
     '1_YEAR': 365,
   };
   return map[planType] ?? 30;
+}
+
+/** روزهای باقی‌ماندهٔ دورهٔ آزمایشی بر اساس تاریخ عضویت */
+function trialDaysRemaining(createdAt: string): number {
+  const start = new Date(createdAt).getTime();
+  if (!Number.isFinite(start)) return 0;
+  const elapsedDays = Math.floor((Date.now() - start) / 86_400_000);
+  return Math.max(0, FREE_TRIAL_DAYS - elapsedDays);
 }

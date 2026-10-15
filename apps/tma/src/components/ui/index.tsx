@@ -11,7 +11,10 @@ export function Card({
   className?: string;
   as?: 'div' | 'section' | 'article';
 }) {
-  return <Tag className={clsx('card p-4', className)}>{children}</Tag>;
+  // `glass-sheen` لایهٔ نوری بالای کارت است (درخشش لبهٔ شیشه).
+  return (
+    <Tag className={clsx('card glass-sheen p-4', className)}>{children}</Tag>
+  );
 }
 
 export function Button({

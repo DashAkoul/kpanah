@@ -12,7 +12,14 @@ import {
   CYCLE_LENGTH_DAYS,
   ECONOMY,
 } from '@kpanah/shared';
-import type { SkillDelta, WeakTerm } from '@kpanah/shared';
+import type {
+  SkillDelta,
+  WeakTerm,
+  CycleGenerationInput,
+  CycleOutline,
+  OutlineDay,
+  GeneratedLesson,
+} from '@kpanah/shared';
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import {
@@ -24,6 +31,7 @@ import {
 } from '../services/repository';
 import { SupabaseClient } from '../services/supabase';
 import { QStashClient } from '../services/qstash';
+import type { AiEngine } from '../services/ai-engine';
 import { isAdminFromEnv } from './admin';
 import { toUserProfile } from '../services/repository';
 
@@ -98,13 +106,28 @@ export async function handleHome(
   const generatingCycle = activeCycle ? null : await r.getGeneratingCycle(user.id);
 
   if (!activeCycle) {
+    // ⚠️ چرا `generating` فقط برای GENERATING است: قبلاً هر چرخهٔ
+    // GENERATING/FAILED باعث `generating: true` می‌شد و کاربر برای چرخهٔ
+    //_FAILED_ تا ابد اسپینر می‌دید. حالا FAILED هم چرخه را با دلیل خطا
+    // برمی‌گرداند تا UI پیام روشن بدهد.
+    const isGenerating = generatingCycle?.status === 'GENERATING';
+    const genLessons = generatingCycle
+      ? await r.getLessonsForCycle(generatingCycle.id)
+      : [];
+
     return jsonSuccess(
       {
         user: profile,
-        cycle: null,
+        cycle: generatingCycle
+          ? toCycleDto(generatingCycle, genLessons)
+          : null,
         lesson: null,
-        generating: Boolean(generatingCycle),
+        generating: isGenerating,
         generationStatus: generatingCycle?.status ?? null,
+        generationError:
+          generatingCycle?.status === 'FAILED'
+            ? generatingCycle.focus_summary ?? 'generation failed'
+            : null,
       },
       requestId,
       env
@@ -113,15 +136,49 @@ export async function handleHome(
 
   const lessons = await r.getLessonsForCycle(activeCycle.id);
   const cycleDto = toCycleDto(activeCycle, lessons);
-  const current = lessons.find((l) => !l.is_completed);
+
+  // در تولید ماژولار، ردیف درس ممکن است ساخته شده باشد ولی محتوایش هنوز
+  // نرسیده باشد (`{}`). در آن حالت درس آماده نیست → وضعیت «در حال تولید»
+  // نشان داده می‌شود تا UI درس خالی/خراب رندر نکند.
+  let current = lessons.find((l) => !l.is_completed);
+  let currentReady =
+    current && current.part_1_data && Object.keys(current.part_1_data as object).length > 0;
+
+  // اگر محتوای روز جاری هنوز ساخته نشده (تولید ماژولار)، همین حالا و در همین
+  // درخواست بسازش. این «تولید تنبل» تضمین می‌کند کاربر هیچ‌وقت درس خالی نبیند
+  // و به waitUntil (که Cloudflare لغو می‌کند) وابسته نباشیم.
+  //
+  // ⚠️ وقتی Queue فعال است، روزهای ۲..۷ را consumer می‌سازد. اگر اینجا هم
+  // بسازیم، دو فراخوانی AI موازی (و اتلاف سهمیه) داریم. پس inline فقط برای
+  // روز ۱ (که هرگز به صف نمی‌رود) یا وقتی صف تنظیم نشده اجرا می‌شود.
+  const useQueue = Boolean(env.GENERATION_QUEUE);
+  const inlineAllowed = !useQueue || current?.day_number === 1;
+  if (current && !currentReady && inlineAllowed) {
+    const gen = await runLessonGeneration(
+      env,
+      user.id,
+      activeCycle.id,
+      activeCycle.cycle_number,
+      current.day_number
+    );
+    if (gen.ok) {
+      const refreshed = await r.getLessonsForCycle(activeCycle.id);
+      const fresh = refreshed.find((l) => l.id === current!.id);
+      if (fresh) {
+        current = fresh;
+        currentReady =
+          fresh.part_1_data && Object.keys(fresh.part_1_data as object).length > 0;
+      }
+    }
+  }
 
   return jsonSuccess(
     {
       user: profile,
       cycle: cycleDto,
-      lesson: current ? toLessonDto(current) : null,
-      generating: false,
-      generationStatus: null,
+      lesson: currentReady ? toLessonDto(current!) : null,
+      generating: Boolean(current) && !currentReady,
+      generationStatus: Boolean(current) && !currentReady ? 'GENERATING' : null,
     },
     requestId,
     env
@@ -417,25 +474,10 @@ export async function handleCompleteLesson(
     const nextNumber = cycle.cycle_number + 1;
     await r.createGeneratingCycle(user.id, nextNumber);
 
-    const qstash = new QStashClient(env);
-    const userId = user.id;
-
-    if (qstash.available) {
-      const enqueued = await qstash.enqueue({
-        kind: 'generate-cycle',
-        userId,
-        cycleNumber: nextNumber,
-      });
-      nextCycleTriggered = enqueued.ok;
-      if (!enqueued.ok) generationDeferred = 'queue_unavailable';
-    } else {
-      // QStash تنظیم نشده — در همان isolate با waitUntil اجرا می‌شود
-      generationDeferred = 'inline';
-      nextCycleTriggered = true;
-      context.waitUntil?.(
-        generateCycleInline(context, userId, nextNumber).catch(() => {})
-      );
-    }
+    // اولویت: Queue/Workflow (مسدودکننده نیست) → fallback inline
+    const via = await scheduleCycleGeneration(context, user.id, nextNumber);
+    nextCycleTriggered = true;
+    generationDeferred = via.via;
   } else if (decision.reason === 'CALENDAR_PAUSED_STALL') {
     generationDeferred = 'calendar_paused';
   }
@@ -463,7 +505,8 @@ export async function handleCompleteLesson(
 export async function runCycleGeneration(
   env: RequestContext['env'],
   userId: string,
-  cycleNumber: number
+  cycleNumber: number,
+  opts: { firstOnly?: boolean } = {}
 ): Promise<{ ok: boolean; error?: string }> {
   const r = repo(env);
 
@@ -474,41 +517,6 @@ export async function runCycleGeneration(
   if (!generating || generating.cycle_number !== cycleNumber) {
     return { ok: false, error: 'no matching GENERATING cycle' };
   }
-
-  // چرخه قبلی برای خلاصه‌سازی و تحلیل
-  const previous = await r.getActiveCycle(userId);
-  const previousLessons = previous ? await r.getLessonsForCycle(previous.id) : [];
-  const telemetry = previous ? await r.getTelemetryForCycle(previous.id) : [];
-  const lexical = await r.getLexicalItems(userId, user.target_language);
-
-  // امتیاز آزمون پنهان روز ۶
-  const day6 = previousLessons.find((l) => l.day_number === 6);
-  let hiddenScore: number | null = null;
-  if (day6) {
-    const day6Answers = telemetry.filter((t) => t.event_type === 'ANSWER');
-    if (day6Answers.length > 0) {
-      const correct = day6Answers.filter((a) => a.is_correct).length;
-      hiddenScore = Math.round((correct / day6Answers.length) * 100);
-    }
-  }
-
-  const delta = buildSkillDelta({
-    events: telemetry.map((t) => ({
-      eventType: t.event_type,
-      itemId: t.item_id,
-      isCorrect: t.is_correct,
-      responseMs: t.response_ms,
-      pauseMs: t.pause_ms,
-    })),
-    lexical: lexical.map((l) => ({
-      term: l.term,
-      box: l.box,
-      lapses: l.lapses,
-      successCount: l.success_count,
-      failCount: l.fail_count,
-    })),
-    hiddenAssessmentScore: hiddenScore,
-  });
 
   // ── Build the failover chain from the admin-managed provider pool ──
   // Order comes from `ai_providers.priority`; keys are decrypted here only.
@@ -526,21 +534,41 @@ export async function runCycleGeneration(
     return { ok: false, error: reason };
   }
 
-  const generationInput = {
-    user: {
-      id: user.id,
-      skillLevel: (user.skill_level ?? 'ZERO') as never,
-      learningGoal: user.learning_goal,
-      uiLanguage: (user.ui_language ?? 'fa') as never,
-      targetLanguage: (user.target_language ?? 'en') as never,
-    },
-    cycleNumber,
-    delta,
-    previousCycleSummary: previous
-      ? `${previous.title}${previous.focus_summary ? ` — ${previous.focus_summary}` : ''}`
-      : null,
-  };
+  const generationInput = await buildGenerationInput(r, user, cycleNumber);
+  if (!generationInput) {
+    await markCycleFailed(r, generating.id, 'could not build generation input');
+    return { ok: false, error: 'could not build generation input' };
+  }
 
+  // ── تولید ماژولار (پیش‌فرض): نقشه → روز ۱ → بقیه در پس‌زمینه ─────
+  if (String(env.MODULAR_GENERATION ?? 'true') !== 'false') {
+    let mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
+      firstOnly: opts.firstOnly,
+    });
+
+    // ── تلاش دوم (فقط وقتی در پس‌زمینه هستیم) ──────────────────────
+    // ⚠️ چرا دیگر به «تولید کامل ۷ روزه» (generateCycle) برنمی‌گردیم:
+    // آن مسیر همهٔ ۷ درس را در **یک** پاسخ می‌خواهد و سقف واقعی
+    // providerها ۸۱۹۲ توکن است → پاسخ همیشه بریده می‌شود و schema
+    // validation می‌شکند. یعنی fallback عملاً هرگز موفق نمی‌شد، فقط
+    // خطای دوم به خطای اول اضافه می‌کرد و سهمیهٔ AI را دو برابر
+    // می‌سوزاند. به‌جای آن یک بار دیگر مسیر ماژولار را امتحان می‌کنیم
+    // (شاید مشکل گذرا بوده باشد).
+    if (!mod.ok && !opts.firstOnly) {
+      console.warn(`[modular] retry once: ${mod.error}`);
+      await new Promise((res) => setTimeout(res, 2_000));
+      mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
+        firstOnly: opts.firstOnly,
+      });
+    }
+
+    if (mod.ok) return { ok: true };
+
+    await markCycleFailed(r, generating.id, mod.error ?? 'modular generation failed');
+    return { ok: false, error: mod.error ?? 'modular generation failed' };
+  }
+
+  // ── مسیر قدیمی (فقط اگر MODULAR_GENERATION=false باشد) ───────────
   const result = await engine.generateCycle(generationInput);
 
   // Record every attempt against the provider pool so the panel can show
@@ -612,8 +640,317 @@ async function recordAttempts(
   }
 }
 
-async function markCycleFailed(
+// ═════════════════════════════════════════════════════════════════════
+// تولید ماژولار — outline → روز ۱ → بقیه در پس‌زمینه
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ساخت ورودی موتور AI از داده‌های کاربر (delta + خلاصهٔ چرخهٔ قبل).
+ * هم مسیر تولید کامل و هم job پس‌زمینهٔ تک‌درس از همین استفاده می‌کنند.
+ */
+async function buildGenerationInput(
   r: ContentRepository,
+  user: UserRow,
+  cycleNumber: number
+): Promise<CycleGenerationInput | null> {
+  const previous = await r.getActiveCycle(user.id);
+  const previousLessons = previous ? await r.getLessonsForCycle(previous.id) : [];
+  const telemetry = previous ? await r.getTelemetryForCycle(previous.id) : [];
+  const lexical = await r.getLexicalItems(user.id, user.target_language);
+
+  const day6 = previousLessons.find((l) => l.day_number === 6);
+  let hiddenScore: number | null = null;
+  if (day6) {
+    const day6Answers = telemetry.filter((t) => t.event_type === 'ANSWER');
+    if (day6Answers.length > 0) {
+      const correct = day6Answers.filter((a) => a.is_correct).length;
+      hiddenScore = Math.round((correct / day6Answers.length) * 100);
+    }
+  }
+
+  const delta = buildSkillDelta({
+    events: telemetry.map((t) => ({
+      eventType: t.event_type,
+      itemId: t.item_id,
+      isCorrect: t.is_correct,
+      responseMs: t.response_ms,
+      pauseMs: t.pause_ms,
+    })),
+    lexical: lexical.map((l) => ({
+      term: l.term,
+      box: l.box,
+      lapses: l.lapses,
+      successCount: l.success_count,
+      failCount: l.fail_count,
+    })),
+    hiddenAssessmentScore: hiddenScore,
+  });
+
+  return {
+    user: {
+      id: user.id,
+      skillLevel: (user.skill_level ?? 'ZERO') as never,
+      learningGoal: user.learning_goal,
+      uiLanguage: (user.ui_language ?? 'fa') as never,
+      targetLanguage: (user.target_language ?? 'en') as never,
+    },
+    cycleNumber,
+    delta,
+    previousCycleSummary: previous
+      ? `${previous.title}${previous.focus_summary ? ` — ${previous.focus_summary}` : ''}`
+      : null,
+  };
+}
+
+/** کلید کش برای بازاستفادهٔ محتوای تولیدشده بین کاربران هم‌سطح */
+/**
+ * نسخهٔ «شکل» محتوای کش‌شده.
+ *
+ * ⚠️ هر بار که قوس آموزشی ۷ روز تغییر کند (مثلاً مرحلهٔ ۸: پروفایل مجزای
+ * هر روز)، این عدد را بالا ببرید. وگرنه outline قدیمی از کش خوانده می‌شود
+ * و بهینه‌سازی جدید هرگز به کاربر نمی‌رسد.
+ */
+const CACHE_CONTENT_VERSION = 2;
+
+function cacheKeyFor(
+  input: CycleGenerationInput,
+  part: string,
+  variant: number
+): string {
+  const goal = input.user.learningGoal ?? 'any';
+  return `${input.user.targetLanguage}:${input.user.skillLevel}:${goal}:${part}:v${variant}`;
+}
+
+/** کلید کش outline — با نسخهٔ محتوا تا بهینه‌سازی‌های جدید اعمال شوند */
+function outlineCacheKeyFor(
+  input: CycleGenerationInput,
+  variant: number
+): string {
+  return `${cacheKeyFor(input, 'outline', variant)}:c${CACHE_CONTENT_VERSION}`;
+}
+
+/**
+ * تولید ماژولار.
+ *
+ * ۱. «نقشهٔ» چرخه (ارزان) — از کش اگر موجود باشد
+ * ۲. محتوای روز ۱ → ذخیره و فعال‌سازی چرخه (کاربر فوراً درس می‌خواند)
+ * ۳. روزهای ۲..۷ در پس‌زمینه (job جدا برای هر روز)
+ */
+async function runModularGeneration(
+  env: RequestContext['env'],
+  r: ContentRepository,
+  engine: AiEngine,
+  cycleId: string,
+  input: CycleGenerationInput,
+  opts: { firstOnly?: boolean } = {}
+): Promise<{ ok: boolean; error?: string }> {
+  // واریانت چرخه: ۳ نسخه در گردش تا هم صرفه‌جویی کنیم هم درس‌ها یکسان نشوند
+  const variant = ((input.cycleNumber - 1) % 3) + 1;
+
+  // ── ۱. نقشهٔ چرخه ────────────────────────────────────────────────
+  const outlineKey = outlineCacheKeyFor(input, variant);
+  let outline = (await r.getCachedContent('CYCLE_OUTLINE', outlineKey)) as CycleOutline | null;
+  let outlineModel = 'cache';
+  let outlineMs = 0;
+
+  if (!outline) {
+    const res = await engine.generateOutline(input);
+    await recordAttempts(r, cycleId, res.attempts);
+    if (!res.outline) {
+      return { ok: false, error: 'outline generation failed' };
+    }
+    outline = res.outline;
+    outlineModel = res.model;
+    outlineMs = res.totalMs;
+    await r.putCachedContent('CYCLE_OUTLINE', outlineKey, input.user.targetLanguage, outline);
+  }
+
+  await r.persistCycleOutline(cycleId, outline, {
+    model: outlineModel,
+    ms: outlineMs,
+    input,
+  });
+
+  // ── ۲. روز ۱ ─────────────────────────────────────────────────────
+  const day1 = outline.days[0]!;
+  const lesson1 = await ensureLessonContent(r, engine, cycleId, input, day1, outline, variant);
+  if (!lesson1) {
+    return { ok: false, error: 'day-1 generation failed' };
+  }
+
+  await r.fillLessonContent(cycleId, 1, lesson1, 'AVAILABLE');
+  await r.activateCycle(cycleId);
+
+  // ── ۳. بقیه در پس‌زمینه ──────────────────────────────────────────
+  //
+  // ⚠️ نکتهٔ مهم (تجربهٔ عملی): Cloudflare وظایف `waitUntil` را پس از
+  // پایان درخواست لغو می‌کند («waitUntil() tasks did not complete within the
+  // allowed time ... and have been cancelled»). پس تولید طولانیِ AI را
+  // نمی‌توان به waitUntil سپرد.
+  //
+  // راه‌حل: روز ۱ همین‌جا (در خود درخواست) ساخته می‌شود و بقیهٔ روزها
+  // «تنبل» (lazy) وقتی کاربر به آن روز رسید تولید می‌شوند — در `home` و
+  // `get-today-lesson`. اگر Cloudflare Queues فعال باشد، از صف بومی
+  // استفاده می‌کنیم که تخصیص زمان مستقل دارد.
+  if (opts.firstOnly) return { ok: true };
+
+  const remaining = outline.days.slice(1);
+
+  // صف بومی Cloudflare (اگر binding تنظیم شده باشد)
+  const queue = (env as { GENERATION_QUEUE?: { send: (m: unknown) => Promise<void> } })
+    .GENERATION_QUEUE;
+  if (queue) {
+    for (const day of remaining) {
+      await queue
+        .send({
+          kind: 'generate-lesson',
+          userId: input.user.id,
+          cycleId,
+          cycleNumber: input.cycleNumber,
+          dayNumber: day.dayNumber,
+        })
+        .catch(() => undefined);
+    }
+    return { ok: true };
+  }
+
+  // QStash فقط اگر صریحاً روشن شده باشد
+  const qstash = new QStashClient(env);
+  if (String(env.USE_QSTASH ?? 'false') === 'true' && qstash.available) {
+    for (const day of remaining) {
+      await qstash
+        .enqueue({
+          kind: 'generate-lesson',
+          userId: input.user.id,
+          cycleId,
+          cycleNumber: input.cycleNumber,
+          dayNumber: day.dayNumber,
+        })
+        .catch(() => undefined);
+    }
+    return { ok: true };
+  }
+
+  // بدون صف: تا سقف بودجهٔ زمانی چند روز را همین‌جا بساز؛ بقیه در
+  // درخواست‌های بعدی کاربر (lazy) پر می‌شوند.
+  const budgetMs = Number(env.BACKGROUND_BUDGET_MS ?? 20_000);
+  const t0 = Date.now();
+  for (const day of remaining) {
+    if (Date.now() - t0 > budgetMs) break;
+    await generateLessonJob(env, r, engine, input, outline, cycleId, day, variant).catch(
+      () => undefined
+    );
+  }
+
+  return { ok: true };
+}
+
+/** تولید (یا خواندن از کش) محتوای یک روز */
+async function ensureLessonContent(
+  r: ContentRepository,
+  engine: AiEngine,
+  cycleId: string,
+  input: CycleGenerationInput,
+  day: OutlineDay,
+  outline: CycleOutline,
+  variant: number
+): Promise<GeneratedLesson | null> {
+  const key = cacheKeyFor(input, `d${day.dayNumber}:${day.kind}`, variant);
+  const cached = (await r.getCachedContent('LESSON', key)) as GeneratedLesson | null;
+  if (cached) return cached;
+
+  const res = await engine.generateLesson(input, day, outline);
+  await recordAttempts(r, cycleId, res.attempts);
+  if (!res.lesson) return null;
+
+  await r.putCachedContent('LESSON', key, input.user.targetLanguage, res.lesson);
+  return res.lesson;
+}
+
+/** تولید و ذخیرهٔ یک روز مشخص (استفاده در job پس‌زمینه) */
+async function generateLessonJob(
+  env: RequestContext['env'],
+  r: ContentRepository,
+  engine: AiEngine,
+  input: CycleGenerationInput,
+  outline: CycleOutline,
+  cycleId: string,
+  day: OutlineDay,
+  variant: number
+): Promise<boolean> {
+  const lesson = await ensureLessonContent(r, engine, cycleId, input, day, outline, variant);
+  if (!lesson) return false;
+  // روزهای بعدی LOCKED می‌مانند؛ منطق باز شدن روزها جداست
+  await r.fillLessonContent(cycleId, day.dayNumber, lesson, 'LOCKED');
+  void env;
+  return true;
+}
+
+/**
+ * job پس‌زمینه برای یک روز — از صف صدا زده می‌شود.
+ * outline از ردیف‌های ذخیره‌شدهٔ همان چرخه بازسازی می‌شود.
+ */
+export async function runLessonGeneration(
+  env: RequestContext['env'],
+  userId: string,
+  cycleId: string,
+  cycleNumber: number,
+  dayNumber: number
+): Promise<{ ok: boolean; error?: string }> {
+  const r = repo(env);
+
+  const user = await r.findUserById(userId);
+  if (!user) return { ok: false, error: 'user not found' };
+
+  const cycle = await r.getCycleById(cycleId);
+  if (!cycle) return { ok: false, error: 'cycle not found' };
+
+  const lessons = await r.getLessonsForCycle(cycleId);
+  if (lessons.length === 0) return { ok: false, error: 'cycle has no lesson rows' };
+
+  // اگر همین حالا پر شده، دوباره تولید نکن (idempotent)
+  const target = lessons.find((l) => l.day_number === dayNumber);
+  if (!target) return { ok: false, error: 'day not found in cycle' };
+  const hasContent =
+    target.part_1_data && Object.keys(target.part_1_data as object).length > 0;
+  if (hasContent) return { ok: true };
+
+  const outline: CycleOutline = {
+    title: cycle.title,
+    titleFa: cycle.title_fa ?? cycle.title,
+    focusSummary: cycle.focus_summary ?? '',
+    days: lessons
+      .map((l) => ({
+        dayNumber: l.day_number,
+        title: l.title,
+        titleFa: l.title_fa ?? l.title,
+        kind: l.kind,
+        // مرحلهٔ ۸ — اگر ستون objective در DB باشد همان را بگیر، وگرنه
+        // از پروفایل ثابت روز استفاده کن (dayProfile خودش fallback دارد).
+        objective: l.objective ?? undefined,
+        objectiveFa: l.objective_fa ?? undefined,
+      }))
+      .sort((a, b) => a.dayNumber - b.dayNumber),
+  };
+
+  const day = outline.days.find((d) => d.dayNumber === dayNumber);
+  if (!day) return { ok: false, error: 'day not in outline' };
+
+  const input = await buildGenerationInput(r, user, cycleNumber);
+  if (!input) return { ok: false, error: 'could not build generation input' };
+
+  const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
+  const providerRows = await r.listActiveAiProviders();
+  const chain = await resolveProviderChain(providerRows, env);
+  const engine = new AiEngine(env, chain);
+  if (!engine.hasAnyProvider) return { ok: false, error: 'no AI provider available' };
+
+  const variant = ((cycleNumber - 1) % 3) + 1;
+  const ok = await generateLessonJob(env, r, engine, input, outline, cycleId, day, variant);
+  return ok ? { ok: true } : { ok: false, error: `day ${dayNumber} generation failed` };
+}
+
+async function markCycleFailed(  r: ContentRepository,
   cycleId: string,
   reason: string
 ): Promise<void> {
@@ -623,12 +960,79 @@ async function markCycleFailed(
   });
 }
 
+/**
+ * ⚠️ نکتهٔ حیاتی دربارهٔ پس‌زمینه:
+ *
+ * Cloudflare وظایف `waitUntil` را پس از پایان درخواست لغو می‌کند
+ * («waitUntil() tasks did not complete within the allowed time … and have been
+ * cancelled»). پس تولید طولانیِ AI را نمی‌توان به آن سپرد. به همین دلیل:
+ *
+ *   • «نقشهٔ» چرخه + محتوای روز ۱ در خودِ درخواست ساخته می‌شود.
+ *   • روزهای بعدی «تنبل» (lazy) وقتی کاربر به آن روز می‌رسد ساخته می‌شوند
+ *     (در `home` / `get-today-lesson`) — همیشه با بودجهٔ کامل یک درخواست.
+ *   • اگر Cloudflare Queues (binding: GENERATION_QUEUE) فعال باشد، روزهای
+ *     بعدی به صف سپرده می‌شوند که زمان مستقل دارد.
+ */
 async function generateCycleInline(
   context: RequestContext,
   userId: string,
-  cycleNumber: number
+  cycleNumber: number,
+  opts: { firstOnly?: boolean } = {}
 ): Promise<void> {
-  await runCycleGeneration(context.env, userId, cycleNumber);
+  await runCycleGeneration(context.env, userId, cycleNumber, opts);
+}
+
+/**
+ * زمان‌بندی تولید چرخه — سه مسیر به ترتیب اولویت:
+ *
+ *  ۱. **Queue** (`GENERATION_QUEUE`): پیام به صف می‌رود و consumer جداگانه
+ *     آن را اجرا می‌کند. درخواست کاربر مسدود نمی‌شود. رایگان (۱۰k/day).
+ *  ۲. **Workflow** (`CYCLE_WORKFLOW`): instance durable ساخته می‌شود؛
+ *     هر روز retry مستقل دارد و اگر Worker کرش کند از همان‌جا ادامه
+ *     می‌یابد. رایگان.
+ *  ۳. **inline**: در همان درخواست با `firstOnly: true` (نقشه + روز ۱).
+ *
+ * `firstOnly` در حالت صف/ورک‌فلو معنای «فقط لایهٔ ساده در درخواست» را
+ * ندارد — کل کار پس‌زمینه است.
+ */
+async function scheduleCycleGeneration(
+  context: RequestContext,
+  userId: string,
+  cycleNumber: number
+): Promise<{ via: 'queue' | 'workflow' | 'inline' }> {
+  const env = context.env;
+
+  // ۱) Queue
+  if (env.GENERATION_QUEUE) {
+    try {
+      await env.GENERATION_QUEUE.send({
+        kind: 'generate-cycle',
+        userId,
+        cycleNumber,
+      });
+      return { via: 'queue' };
+    } catch (err) {
+      console.warn(
+        `[schedule] queue send failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // ۲) Workflow
+  if (env.CYCLE_WORKFLOW) {
+    try {
+      await env.CYCLE_WORKFLOW.create({ userId, cycleNumber, full: true });
+      return { via: 'workflow' };
+    } catch (err) {
+      console.warn(
+        `[schedule] workflow create failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  // ۳) inline
+  await generateCycleInline(context, userId, cycleNumber, { firstOnly: true });
+  return { via: 'inline' };
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -665,17 +1069,16 @@ export async function handleOnboarding(
   const existing = await r.getLatestCycle(user.id);
   if (!existing) {
     const cycle = await r.createGeneratingCycle(user.id, 1);
-    const qstash = new QStashClient(env);
 
-    if (qstash.available) {
-      await qstash.enqueue({ kind: 'generate-cycle', userId: user.id, cycleNumber: 1 });
-    } else {
-      context.waitUntil?.(
-        generateCycleInline(context, user.id, 1).catch(() => {})
-      );
-    }
+    // اولویت: Queue/Workflow (مسدودکننده نیست) → fallback inline
+    const via = await scheduleCycleGeneration(context, user.id, 1);
     return jsonSuccess(
-      { onboardingComplete: true, firstCycleId: cycle.id, generating: true },
+      {
+        onboardingComplete: true,
+        firstCycleId: cycle.id,
+        generating: true,
+        generationVia: via.via,
+      },
       requestId,
       env
     );

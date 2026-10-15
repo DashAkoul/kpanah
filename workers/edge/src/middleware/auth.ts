@@ -51,16 +51,74 @@ function routeClassForAction(action: string): RouteClass {
     case 'admin-gift':
     case 'admin-revoke':
     case 'admin-stats':
+    case 'admin-support-list':
+    case 'admin-support-thread':
+    case 'admin-support-reply':
+    case 'admin-plans':
+    case 'admin-plan-create':
+    case 'admin-plan-update':
+    case 'admin-plan-delete':
+    case 'admin-message-send':
+    case 'admin-messages-list':
+    case 'admin-list-admins':
+    case 'admin-set-role':
     case 'admin-ai-providers':
     case 'admin-ai-provider-create':
     case 'admin-ai-provider-update':
     case 'admin-ai-provider-delete':
     case 'admin-ai-provider-reorder':
     case 'admin-ai-provider-test':
+    case 'admin-ai-provider-models':
       return 'ADMIN';
     default:
       return 'AUTHENTICATED';
   }
+}
+
+/**
+ * RBAC — کدام نقش‌ها به کدام اکشن‌های ادمین دسترسی دارند.
+ *
+ * SUPER_ADMIN همه‌چیز. بقیه فقط دامنهٔ خودشان:
+ *   SUPPORT   → تیکت‌ها + دیدن کاربران (بدون داده مالی حساس)
+ *   MARKETING → آمار/کاربران + پیام همگانی
+ *   FINANCE   → کاربران + اشتراک‌ها + آمار
+ */
+export type AdminRole = 'SUPER_ADMIN' | 'SUPPORT' | 'MARKETING' | 'FINANCE';
+
+const ADMIN_ACTION_ROLES: Record<string, AdminRole[]> = {
+  'admin-users': ['SUPER_ADMIN', 'SUPPORT', 'MARKETING', 'FINANCE'],
+  'admin-user-detail': ['SUPER_ADMIN', 'SUPPORT', 'MARKETING', 'FINANCE'],
+  'admin-stats': ['SUPER_ADMIN', 'MARKETING', 'FINANCE'],
+  'admin-gift': ['SUPER_ADMIN', 'FINANCE'],
+  'admin-revoke': ['SUPER_ADMIN', 'FINANCE'],
+  'admin-support-list': ['SUPER_ADMIN', 'SUPPORT'],
+  'admin-support-thread': ['SUPER_ADMIN', 'SUPPORT'],
+  'admin-support-reply': ['SUPER_ADMIN', 'SUPPORT'],
+  'admin-plans': ['SUPER_ADMIN', 'FINANCE'],
+  'admin-plan-create': ['SUPER_ADMIN', 'FINANCE'],
+  'admin-plan-update': ['SUPER_ADMIN', 'FINANCE'],
+  'admin-plan-delete': ['SUPER_ADMIN', 'FINANCE'],
+  'admin-message-send': ['SUPER_ADMIN', 'MARKETING'],
+  'admin-messages-list': ['SUPER_ADMIN', 'MARKETING'],
+  // مدیریت نقش‌ها فقط برای مدیر اصلی
+  'admin-list-admins': ['SUPER_ADMIN'],
+  'admin-set-role': ['SUPER_ADMIN'],
+  // کلید AI فقط برای مدیر اصلی
+  'admin-ai-providers': ['SUPER_ADMIN'],
+  'admin-ai-provider-create': ['SUPER_ADMIN'],
+  'admin-ai-provider-update': ['SUPER_ADMIN'],
+  'admin-ai-provider-delete': ['SUPER_ADMIN'],
+  'admin-ai-provider-reorder': ['SUPER_ADMIN'],
+  'admin-ai-provider-test': ['SUPER_ADMIN'],
+  'admin-ai-provider-models': ['SUPER_ADMIN'],
+};
+
+/** آیا این نقش اجازهٔ این اکشن را دارد؟ */
+export function roleAllows(action: string, role: AdminRole): boolean {
+  if (role === 'SUPER_ADMIN') return true;
+  const allowed = ADMIN_ACTION_ROLES[action];
+  if (!allowed) return false;
+  return allowed.includes(role);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -76,7 +134,9 @@ export async function authenticate(
   request: Request,
   env: Env,
   requestId: string,
-  routeClass: RouteClass
+  routeClass: RouteClass,
+  /** اکشن درخواست — برای بررسی RBAC روی مسیرهای ADMIN */
+  action = ''
 ): Promise<AuthOutcome> {
   const base: RequestContext = { env, requestId };
 
@@ -126,8 +186,8 @@ export async function authenticate(
   const claims = verified.payload!;
 
   if (routeClass === 'ADMIN') {
-    const isAdmin = await isAdminUser(claims.telegramId, env);
-    if (!isAdmin) {
+    const role = await resolveAdminRole(claims.telegramId, env);
+    if (!role) {
       return {
         context: base,
         error: await jsonError(
@@ -135,6 +195,27 @@ export async function authenticate(
         ),
       };
     }
+    if (!roleAllows(action, role)) {
+      return {
+        context: base,
+        error: await jsonError(
+          'UNAUTHORIZED',
+          `Your role (${role}) cannot perform ${action}`,
+          requestId,
+          env,
+          403
+        ),
+      };
+    }
+    return {
+      context: {
+        ...base,
+        claims,
+        telegramId: claims.telegramId,
+        userId: claims.userId,
+        adminRole: role,
+      },
+    };
   }
 
   return {
@@ -142,13 +223,35 @@ export async function authenticate(
   };
 }
 
-async function isAdminUser(telegramId: number, env: Env): Promise<boolean> {
+/**
+ * نقش ادمین کاربر را تعیین می‌کند.
+ *  ۱. اگر در TELEGRAM_ADMIN_IDS باشد → SUPER_ADMIN
+ *  ۲. وگرنه نقش ذخیره‌شده در دیتابیس (`users.admin_role`) بررسی می‌شود
+ */
+async function resolveAdminRole(telegramId: number, env: Env): Promise<AdminRole | null> {
   const ids = (env.TELEGRAM_ADMIN_IDS ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
     .map(Number);
-  return ids.includes(telegramId);
+  if (ids.includes(telegramId)) return 'SUPER_ADMIN';
+
+  try {
+    const res = await fetch(
+      `${env.SUPABASE_URL}/rest/v1/users?telegram_id=eq.${telegramId}&select=admin_role&limit=1`,
+      {
+        headers: {
+          apikey: env.SUPABASE_SERVICE_ROLE_KEY ?? '',
+          Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY ?? ''}`,
+        },
+      }
+    );
+    if (!res.ok) return null;
+    const rows = (await res.json()) as { admin_role: AdminRole | null }[];
+    return rows[0]?.admin_role ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────

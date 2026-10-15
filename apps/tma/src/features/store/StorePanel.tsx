@@ -135,22 +135,28 @@ function PlanRow({
 
           {plan.discountPercent > 0 && (
             <p className="mt-1.5 flex items-center gap-1.5 text-[11px]">
-              <span className="text-text-muted line-through">
-                {plan.priceIrr.toLocaleString('fa-IR')} تومان
-              </span>
               <Chip tone="danger">{t('store.discount', { percent: plan.discountPercent })}</Chip>
             </p>
           )}
         </div>
 
         <div className="shrink-0 text-end">
-          <p className="text-base font-bold text-text">
-            {plan.finalPriceStars}
-            <span className="text-xs font-normal text-text-hint"> ⭐</span>
-          </p>
-          <p className="text-[10px] text-text-muted">
-            {plan.finalPriceIrr.toLocaleString('fa-IR')} تومان
-          </p>
+          {plan.discountPercent > 0 ? (
+            <>
+              <p className="text-xs text-text-muted line-through">
+                {plan.priceStars} ⭐
+              </p>
+              <p className="text-base font-bold text-text">
+                {plan.finalPriceStars}
+                <span className="text-xs font-normal text-text-hint"> ⭐</span>
+              </p>
+            </>
+          ) : (
+            <p className="text-base font-bold text-text">
+              {plan.finalPriceStars}
+              <span className="text-xs font-normal text-text-hint"> ⭐</span>
+            </p>
+          )}
         </div>
       </div>
     </button>

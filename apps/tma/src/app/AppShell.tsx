@@ -1,18 +1,28 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { TopBar } from '../components/layout/TopBar';
 import { BottomNav, type TabKey } from '../components/layout/BottomNav';
 import { LearnTab } from '../features/learn/LearnTab';
-import { ProfileTab } from '../features/profile/ProfileTab';
-import { SettingsTab } from '../features/settings/SettingsTab';
 import { LessonPlayer } from '../features/learn/LessonPlayer';
 import { LessonResult } from '../features/learn/LessonResult';
 import { OnboardingFlow } from '../features/onboarding/OnboardingFlow';
 import { Button, Toast } from '../components/ui';
+import { MessageBanner } from '../components/MessageBanner';
 import { useHome, useCompleteLesson } from '../hooks/useApi';
 import { useSessionStore } from '../store/session';
 import { useLessonSession } from '../store/session';
 import { setBackButton } from '../lib/telegram';
+
+/**
+ * تب‌های سنگین (نمودارها و پنل مدیریت) تنبل بارگذاری می‌شوند تا
+ * باندل اولیهٔ اپ کوچک‌تر و اجرای اولیه سریع‌تر باشد.
+ */
+const ProfileTab = lazy(() =>
+  import('../features/profile/ProfileTab').then((m) => ({ default: m.ProfileTab }))
+);
+const SettingsTab = lazy(() =>
+  import('../features/settings/SettingsTab').then((m) => ({ default: m.SettingsTab }))
+);
 
 type Screen = 'tabs' | 'lesson' | 'result';
 
@@ -147,7 +157,8 @@ export function AppShell() {
   // ── Tabs ─────────────────────────────────────────────────────────
   return (
     <div className="flex min-h-[100dvh] flex-col bg-bg">
-      <TopBar onOpenStore={() => { setTab('profile'); }} />
+      <TopBar />
+      <MessageBanner />
 
       <main className="flex-1">
         {tab === 'learn' && (
@@ -160,8 +171,16 @@ export function AppShell() {
             }}
           />
         )}
-        {tab === 'profile' && <ProfileTab />}
-        {tab === 'settings' && <SettingsTab />}
+        {tab === 'profile' && (
+          <Suspense fallback={<TabFallback />}>
+            <ProfileTab />
+          </Suspense>
+        )}
+        {tab === 'settings' && (
+          <Suspense fallback={<TabFallback />}>
+            <SettingsTab />
+          </Suspense>
+        )}
       </main>
 
       <BottomNav active={tab} onChange={setTab} />
@@ -178,6 +197,16 @@ export interface ResultData {
   cycleCompleted: boolean;
   nextCycleTriggered: boolean;
   appLocked: boolean;
+}
+
+function TabFallback() {
+  return (
+    <div className="space-y-2 p-4">
+      <div className="skeleton h-24" />
+      <div className="skeleton h-16" />
+      <div className="skeleton h-16" />
+    </div>
+  );
 }
 
 /**

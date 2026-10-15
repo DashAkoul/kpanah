@@ -253,11 +253,24 @@ export async function handleAdminReorderProviders(
 
   // Rewrite priority as a dense 1..n sequence. Doing it in one pass keeps
   // the chain order exactly as the admin arranged it.
-  await Promise.all(
+  const results = await Promise.all(
     order.map((id, index) =>
-      r.updateAiProvider(id, { priority: index + 1 }).catch(() => null)
+      r
+        .updateAiProvider(id, { priority: index + 1 })
+        .then(() => true)
+        .catch(() => false)
     )
   );
+
+  if (results.some((ok) => !ok)) {
+    return jsonError(
+      'INTERNAL_ERROR',
+      'Could not reorder every provider',
+      requestId,
+      env,
+      500
+    );
+  }
 
   const rows = await r.listAllAiProviders();
   const chain = await resolveProviderChain(rows, env);
@@ -423,6 +436,160 @@ async function probeOnce(provider: ResolvedProvider): Promise<string> {
     }
     const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
     return json.choices?.[0]?.message?.content ?? '';
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=admin-ai-provider-models
+//
+// پس از «تست کلید»، فهرست مدل‌های قابل‌استفاده با همان کلید را برمی‌گرداند
+// تا مدیر از یک منوی کشویی مدل را انتخاب کند (بدون تایپ دستی نام مدل).
+//
+// دو حالت:
+//   • id موجود  → کلید ذخیره‌شدهٔ همان provider استفاده می‌شود
+//   • draft     → کلید/آدرس/پروتکل از بدنهٔ درخواست (قبل از ذخیره)
+// ═════════════════════════════════════════════════════════════════════
+
+export async function handleAdminListProviderModels(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const url = new URL(request.url);
+  const id = url.searchParams.get('id');
+
+  let protocol: string;
+  let vendor: string;
+  let baseUrl: string | null;
+  let apiKey: string;
+
+  if (id) {
+    const r = repo(env);
+    const row = await r.getAiProviderById(id);
+    if (!row) {
+      return jsonError('NOT_FOUND', 'Provider not found', requestId, env, 404);
+    }
+    const chain = await resolveProviderChain([row], env);
+    const provider = chain[0];
+    if (!provider) {
+      return jsonSuccess(
+        { ok: false, models: [], error: 'کلید این provider قابل استفاده نیست.' },
+        requestId,
+        env
+      );
+    }
+    protocol = provider.protocol;
+    vendor = provider.vendor;
+    baseUrl = provider.baseUrl;
+    apiKey = provider.apiKey;
+  } else {
+    const body = await readJson<{
+      protocol?: string;
+      vendor?: string;
+      baseUrl?: string | null;
+      apiKey?: string;
+    }>(request);
+
+    if (!body?.apiKey || !body?.protocol) {
+      return jsonError(
+        'VALIDATION_ERROR',
+        'protocol and apiKey are required',
+        requestId,
+        env,
+        422
+      );
+    }
+    protocol = body.protocol;
+    vendor = body.vendor ?? 'custom';
+    baseUrl = body.baseUrl ?? null;
+    apiKey = body.apiKey;
+  }
+
+  try {
+    const models = await listModels({ protocol, vendor, baseUrl, apiKey });
+    return jsonSuccess({ ok: true, models }, requestId, env);
+  } catch (err) {
+    return jsonSuccess(
+      {
+        ok: false,
+        models: [],
+        error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
+      },
+      requestId,
+      env
+    );
+  }
+}
+
+/** فهرست مدل‌های قابل‌استفاده با یک کلید — بر اساس پروتکل */
+async function listModels(input: {
+  protocol: string;
+  vendor: string;
+  baseUrl: string | null;
+  apiKey: string;
+}): Promise<string[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+
+  try {
+    // ── Gemini ───────────────────────────────────────────────────────
+    if (input.protocol === 'gemini') {
+      const base =
+        input.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
+      const res = await fetch(`${base.replace(/\/$/, '')}/models?pageSize=200`, {
+        headers: { 'x-goog-api-key': input.apiKey },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      }
+      const json = (await res.json()) as {
+        models?: {
+          name?: string;
+          supportedGenerationMethods?: string[];
+        }[];
+      };
+      return (json.models ?? [])
+        .filter((m) =>
+          (m.supportedGenerationMethods ?? []).includes('generateContent')
+        )
+        .map((m) => (m.name ?? '').replace(/^models\//, ''))
+        .filter(Boolean)
+        .sort();
+    }
+
+    // ── Anthropic ────────────────────────────────────────────────────
+    if (input.protocol === 'anthropic') {
+      const base = input.baseUrl ?? 'https://api.anthropic.com';
+      const res = await fetch(`${base.replace(/\/$/, '')}/v1/models?limit=100`, {
+        headers: {
+          'x-api-key': input.apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`Anthropic ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      }
+      const json = (await res.json()) as { data?: { id?: string }[] };
+      return (json.data ?? []).map((m) => m.id ?? '').filter(Boolean).sort();
+    }
+
+    // ── OpenAI-compatible ────────────────────────────────────────────
+    const base = input.baseUrl ?? 'https://api.deepseek.com';
+    const res = await fetch(`${base.replace(/\/$/, '')}/models`, {
+      headers: { Authorization: `Bearer ${input.apiKey}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(
+        `${input.vendor} ${res.status}: ${(await res.text()).slice(0, 200)}`
+      );
+    }
+    const json = (await res.json()) as { data?: { id?: string }[] };
+    return (json.data ?? []).map((m) => m.id ?? '').filter(Boolean).sort();
   } finally {
     clearTimeout(timer);
   }

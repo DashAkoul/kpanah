@@ -1377,7 +1377,10 @@ export class ContentRepository {
     try {
       const rows = asRows(
         await this.db.select<Record<string, unknown>>('content_cache', {
-          select: 'payload',
+          // ⚠️ `hits` هم خوانده می‌شود: ستون از ابتدا وجود داشت ولی هرگز
+          // افزایش نمی‌یافت، پس نمی‌شد فهمید کدام محتوا واقعاً استفاده
+          // می‌شود (برای تصمیم‌گیری دربارهٔ TTL و کیفیت پرامپت).
+          select: 'payload,hits',
           kind: `eq.${kind}`,
           cache_key: `eq.${cacheKey}`,
           limit: '1',
@@ -1385,12 +1388,15 @@ export class ContentRepository {
       );
       const row = rows[0];
       if (!row) return null;
-      // شمارندهٔ استفاده را بی‌صدا بالا ببر
+      // شمارندهٔ استفاده را بی‌صدا بالا ببر (کش اختیاری است — خطا مهم نیست)
       this.db
         .update(
           'content_cache',
           { kind: `eq.${kind}`, cache_key: `eq.${cacheKey}` },
-          { last_used_at: new Date().toISOString() }
+          {
+            hits: (Number(row.hits) || 0) + 1,
+            last_used_at: new Date().toISOString(),
+          }
         )
         .catch(() => {});
       return row.payload ?? null;
@@ -1414,6 +1420,31 @@ export class ContentRepository {
       });
     } catch {
       /* کش اختیاری است */
+    }
+  }
+
+  /**
+   * پاکسازی کش کهنه — فقط ردیف‌های **قدیمی و کم‌مصرف**.
+   *
+   * ⚠️ عمداً محافظه‌کارانه است: هر ردیف حذف‌شده یعنی تولید دوباره و
+   * هزینهٔ AI. فقط چیزی می‌رود که مدت‌ها دست‌نخورده مانده و تقریباً هیچ
+   * کسی از آن استفاده نکرده (یعنی احتمالاً بی‌کیفیت یا بی‌ربط است).
+   */
+  async pruneContentCache(olderThanDays: number, maxHits: number): Promise<number> {
+    const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+    try {
+      const rows = await this.db.select<{ id: string }>('content_cache', {
+        last_used_at: `lt.${cutoff}`,
+        hits: `lt.${maxHits}`,
+        select: 'id',
+        limit: '500',
+      });
+      const ids = ((rows as { id: string }[]) ?? []).map((row) => row.id);
+      if (ids.length === 0) return 0;
+      await this.db.delete('content_cache', { id: `in.(${ids.join(',')})` });
+      return ids.length;
+    } catch {
+      return 0;
     }
   }
 

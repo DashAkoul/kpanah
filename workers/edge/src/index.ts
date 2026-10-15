@@ -231,7 +231,9 @@ export default {
     try {
       if (cron === '0 * * * *') {
         const res = await runHourlyMaintenance(env);
-        console.log(`[cron:hourly] expired subscriptions: ${res.expired}`);
+        console.log(
+          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}`
+        );
       } else if (cron === '*/5 * * * *') {
         const res = await runBackgroundGeneration(env);
         console.log(

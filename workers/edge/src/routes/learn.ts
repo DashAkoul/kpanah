@@ -421,6 +421,9 @@ export async function handleCompleteLesson(
   await r.completeLesson(lessonId, { durationSeconds, status: 'COMPLETED' });
   await r.unlockNextLesson(lesson.cycle_id, lesson.day_number);
 
+  // ── 3.5 پیش‌بارگذاری روز بعد (کاربر هرگز منتظر تولید نماند) ───────
+  await prefetchNextLesson(context, user.id, lesson.cycle_id, lesson.day_number);
+
   // ── 4. پاداش و استریک ────────────────────────────────────────────
   const lessonScore = scoreLesson({
     answers: answers.map((a) => ({ isCorrect: a.isCorrect, responseMs: a.responseMs })),
@@ -502,6 +505,54 @@ export async function handleCompleteLesson(
 // ═════════════════════════════════════════════════════════════════════
 // Cycle generation worker (shared by inline fallback and QStash)
 // ═════════════════════════════════════════════════════════════════════
+
+/**
+ * پیش‌بارگذاری روز بعد پس از تکمیل یک روز.
+ *
+ * ⚠️ چرا: پیش از این تولید روز بعد فقط **تنبل** و لحظهٔ باز کردن آن روز
+ * انجام می‌شد → کاربر واقعاً منتظر می‌ماند. با پیش‌بارگذاری، تا وقتی
+ * کاربر روز بعد را باز کند، محتوا آماده است.
+ *
+ * ترتیب اولویت:
+ *  ۱. صف بومی (`GENERATION_QUEUE`) — زمان مستقل، مطمئن‌ترین.
+ *  ۲. `waitUntil` — بهترین تلاش. Cloudflare کارهای طولانی را لغو می‌کند
+ *     ولی این فقط **یک** درس است (~۱۰-۲۰s) و اگر لغو شود، مسیر تنبل و
+ *     کرون جبران می‌کنند.
+ */
+async function prefetchNextLesson(
+  context: RequestContext,
+  userId: string,
+  cycleId: string,
+  completedDay: number
+): Promise<void> {
+  if (completedDay >= CYCLE_LENGTH_DAYS) return; // روز ۷ = پایان چرخه
+
+  const nextDay = completedDay + 1;
+  const r = repo(context.env);
+  const cycle = await r.getCycleById(cycleId);
+  if (!cycle) return;
+
+  const queue = context.env.GENERATION_QUEUE;
+  if (queue) {
+    await queue
+      .send({
+        kind: 'generate-lesson',
+        userId,
+        cycleId,
+        cycleNumber: cycle.cycle_number,
+        dayNumber: nextDay,
+      })
+      .catch(() => undefined);
+    return;
+  }
+
+  if (!context.waitUntil) return;
+  context.waitUntil(
+    runLessonGeneration(context.env, userId, cycleId, cycle.cycle_number, nextDay).catch(
+      () => undefined
+    )
+  );
+}
 
 /**
  * قفل کوتاه‌مدت تولید برای یک روز مشخص (کلید: `<cycleId>:<day>`).

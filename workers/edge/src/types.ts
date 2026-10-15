@@ -43,6 +43,11 @@ export interface Env {
    * محافظت از کلید در برابر حلقهٔ باگ‌دار که کل سهمیه را می‌سوزاند.
    */
   AI_TOKEN_BUDGET_PER_DAY?: string;
+  /**
+   * آیا نقاط ضعف کاربر در کلید کش درس اثر بگذارند؟ پیش‌فرض `true`.
+   * `false` = کش کاملاً مشترک (ارزان‌تر، ولی شخصی‌سازی اسمی).
+   */
+  PERSONALIZED_CACHE?: string;
 
   /**
    * Master secret for encrypting AI provider keys that admins enter through

@@ -350,6 +350,14 @@ export default {
         explain:
           'Engines are tried top to bottom. If one fails, the app automatically switches to the next one so lesson generation never stops.',
         chain: 'Current order',
+        usage: 'Usage & effectiveness',
+        cacheEntries: 'Cache entries',
+        cacheHits: 'Served from cache',
+        termCards: 'Term cards',
+        tokens24h: 'Tokens / 24h',
+        attempts24h: 'AI attempts',
+        failed24h: 'Failed',
+        usageHint: 'Every cache hit is an AI call that did not cost anything.',
         kindLabel: 'Provider category',
         kind: {
           TEXT: 'Text',

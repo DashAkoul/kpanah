@@ -264,4 +264,12 @@ export const MOCK_AI_PROVIDERS = {
     { id: 'p3', label: 'Claude Sonnet (جایگزین دوم)', model: 'claude-3-5-sonnet-latest' },
   ],
   encryptionReady: true,
+  usage: {
+    cacheEntries: 34,
+    cacheHits: 128,
+    termCards: 96,
+    tokens24h: 184_320,
+    attempts24h: 41,
+    failed24h: 6,
+  },
 };

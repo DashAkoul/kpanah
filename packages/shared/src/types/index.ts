@@ -498,6 +498,20 @@ export interface AiProviderListResponse {
   chain: { id: string; label: string; model: string }[];
   /** false یعنی PROVIDER_ENCRYPTION_KEY روی Worker تنظیم نشده */
   encryptionReady: boolean;
+  /**
+   * آمار مصرف و اثربخشی — برای اینکه صرفه‌جویی توکن **اندازه‌گیری** شود،
+   * نه فقط ادعا. `cacheHits` بالا یعنی کش واقعاً دارد کار می‌کند.
+   */
+  usage: {
+    cacheEntries: number;
+    cacheHits: number;
+    /** کارت‌های واژه در کش سطح واژه (مِیگرشن ۰۰۱۳) */
+    termCards: number;
+    /** مجموع توکن مصرفی ۲۴ ساعت گذشته (همهٔ کاربران) */
+    tokens24h: number;
+    attempts24h: number;
+    failed24h: number;
+  };
 }
 
 export interface CreateAiProviderInput {

@@ -1814,6 +1814,63 @@ export class ContentRepository {
       .catch(() => undefined);
   }
 
+  /**
+   * آمار مصرف و اثربخشی — تا بتوان بهینه‌سازی هزینه را **اندازه گرفت**.
+   *
+   * ⚠️ چرا لازم است: بدون این، «صرفه‌جویی توکن» فقط ادعا است. `cacheHits`
+   * نشان می‌دهد کش واقعاً کار می‌کند، `tokens24h` مصرف واقعی است، و
+   * `failed24h/attempts24h` نرخ شکست providerها را لو می‌دهد (هر شکست =
+   * توکن سوخته بدون خروجی).
+   *
+   * ⚠️ روی خطا صفر برمی‌گرداند — این یک گزارش است، نه شرط درستی.
+   */
+  async getUsageStats(): Promise<{
+    cacheEntries: number;
+    cacheHits: number;
+    termCards: number;
+    tokens24h: number;
+    attempts24h: number;
+    failed24h: number;
+  }> {
+    const empty = {
+      cacheEntries: 0,
+      cacheHits: 0,
+      termCards: 0,
+      tokens24h: 0,
+      attempts24h: 0,
+      failed24h: 0,
+    };
+    const since = new Date(Date.now() - 86_400_000).toISOString();
+    try {
+      const [cacheRaw, cardsRaw, logsRaw] = await Promise.all([
+        this.db.select<{ hits: number | null }>('content_cache', {
+          select: 'hits',
+          limit: '5000',
+        }),
+        this.db.select<{ id: string }>('term_cards', { select: 'id', limit: '5000' }),
+        this.db.select<{ tokens_used: number | null; ok: boolean | null }>('ai_attempt_log', {
+          created_at: `gte.${since}`,
+          select: 'tokens_used,ok',
+          limit: '5000',
+        }),
+      ]);
+
+      const cache = asRows(cacheRaw);
+      const logs = asRows(logsRaw);
+
+      return {
+        cacheEntries: cache.length,
+        cacheHits: cache.reduce((sum, row) => sum + Number(row.hits ?? 0), 0),
+        termCards: asRows(cardsRaw).length,
+        tokens24h: logs.reduce((sum, row) => sum + Number(row.tokens_used ?? 0), 0),
+        attempts24h: logs.length,
+        failed24h: logs.filter((row) => row.ok === false).length,
+      };
+    } catch {
+      return empty;
+    }
+  }
+
   /** آمار کش — چند بار در ماه از کش خوانده شده (معیار صرفه‌جویی توکن) */
   async getCacheStats(): Promise<{ entries: number; totalHits: number }> {
     try {

@@ -52,9 +52,10 @@ export async function handleAdminListProviders(
   const { env, requestId } = context;
   const r = repo(env);
 
-  const [rows, attempts] = await Promise.all([
+  const [rows, attempts, usage] = await Promise.all([
     r.listAllAiProviders(),
     r.listAiAttempts(30),
+    r.getUsageStats(),
   ]);
 
   // Resolve the chain so the panel can show which providers are actually
@@ -71,6 +72,7 @@ export async function handleAdminListProviders(
       // The exact order the engine will try, for display.
       chain: chain.map((p) => ({ id: p.id, label: p.label, model: p.model })),
       encryptionReady: Boolean(env.PROVIDER_ENCRYPTION_KEY),
+      usage,
     },
     requestId,
     env

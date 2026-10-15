@@ -246,6 +246,50 @@ export function AiProvidersPanel() {
         + {t('admin.ai.addProvider')}
       </Button>
 
+      {/* مصرف و اثربخشی — تا صرفه‌جویی توکن اندازه‌گیری شود، نه فقط ادعا */}
+      {data?.usage && (
+        <div className="space-y-2 pt-2">
+          <h3 className="text-sm font-semibold text-text">{t('admin.ai.usage')}</h3>
+          <div className="grid grid-cols-3 gap-1.5">
+            {[
+              { key: 'cacheEntries', value: data.usage.cacheEntries },
+              { key: 'cacheHits', value: data.usage.cacheHits, accent: true },
+              { key: 'termCards', value: data.usage.termCards },
+              { key: 'tokens24h', value: data.usage.tokens24h.toLocaleString('en-US') },
+              { key: 'attempts24h', value: data.usage.attempts24h },
+              {
+                key: 'failed24h',
+                value: data.usage.failed24h,
+                danger: data.usage.failed24h > 0,
+              },
+            ].map((cell) => (
+              <div
+                key={cell.key}
+                className={clsx(
+                  'rounded-lg px-2 py-1.5 text-center',
+                  cell.danger ? 'bg-danger-100/50' : 'bg-[var(--surface-sunken)]'
+                )}
+              >
+                <p
+                  className={clsx(
+                    'text-sm font-bold tabular-nums',
+                    cell.accent ? 'text-success-600' : 'text-text'
+                  )}
+                >
+                  {cell.value}
+                </p>
+                <p className="text-[9px] leading-tight text-text-hint">
+                  {t(`admin.ai.${cell.key}`)}
+                </p>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] leading-relaxed text-text-hint">
+            {t('admin.ai.usageHint')}
+          </p>
+        </div>
+      )}
+
       {/* Attempt log */}
       {data && data.attempts.length > 0 && (
         <div className="space-y-2 pt-2">

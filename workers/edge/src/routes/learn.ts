@@ -543,57 +543,28 @@ export async function runCycleGeneration(
     return { ok: false, error: 'could not build generation input' };
   }
 
-  // ── تولید ماژولار (پیش‌فرض): نقشه → روز ۱ → بقیه در پس‌زمینه ─────
-  if (String(env.MODULAR_GENERATION ?? 'true') !== 'false') {
-    let mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
-      firstOnly: opts.firstOnly,
-    });
-
-    // ── تلاش دوم (فقط وقتی در پس‌زمینه هستیم) ──────────────────────
-    // ⚠️ چرا دیگر به «تولید کامل ۷ روزه» (generateCycle) برنمی‌گردیم:
-    // آن مسیر همهٔ ۷ درس را در **یک** پاسخ می‌خواهد و سقف واقعی
-    // providerها ۸۱۹۲ توکن است → پاسخ همیشه بریده می‌شود و schema
-    // validation می‌شکند. یعنی fallback عملاً هرگز موفق نمی‌شد، فقط
-    // خطای دوم به خطای اول اضافه می‌کرد و سهمیهٔ AI را دو برابر
-    // می‌سوزاند. به‌جای آن یک بار دیگر مسیر ماژولار را امتحان می‌کنیم
-    // (شاید مشکل گذرا بوده باشد).
-    if (!mod.ok && !opts.firstOnly) {
-      console.warn(`[modular] retry once: ${mod.error}`);
-      await new Promise((res) => setTimeout(res, 2_000));
-      mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
-        firstOnly: opts.firstOnly,
-      });
-    }
-
-    if (mod.ok) return { ok: true };
-
-    await markCycleFailed(r, generating.id, mod.error ?? 'modular generation failed');
-    return { ok: false, error: mod.error ?? 'modular generation failed' };
-  }
-
-  // ── مسیر قدیمی (فقط اگر MODULAR_GENERATION=false باشد) ───────────
-  const result = await engine.generateCycle(generationInput);
-
-  // Record every attempt against the provider pool so the panel can show
-  // real health data and the operator can see the failover happen.
-  await recordAttempts(r, generating.id, result.attempts);
-
-  if (!result.cycle) {
-    const detail = result.attempts
-      .map((a) => `${a.provider}/${a.model}: ${a.error ?? 'failed'}`)
-      .join(' | ');
-    await markCycleFailed(r, generating.id, detail);
-    return { ok: false, error: detail };
-  }
-
-  await r.persistGeneratedCycle(generating.id, result.cycle, {
-    model: result.model ?? 'unknown',
-    ms: result.totalMs,
-    tokens: result.attempts.find((a) => a.ok)?.tokensUsed,
-    input: generationInput,
+  // ── تولید ماژولار: نقشه → روز ۱ → بقیه در پس‌زمینه ─────────────
+  // ⚠️ مسیر legacy «کل چرخهٔ ۷ درسی در یک پاسخ» **حذف شد**: با سقف واقعی
+  // providerها (۸۱۹۲ توکن) پاسخ همیشه بریده می‌شد و schema validation
+  // می‌شکست — یعنی هرگز موفق نمی‌شد و فقط سهمیهٔ AI را دو برابر می‌سوزاند.
+  let mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
+    firstOnly: opts.firstOnly,
   });
 
-  return { ok: true };
+  // ── تلاش دوم (فقط در پس‌زمینه) ─────────────────────────────────
+  // ارزان‌تر از برگشتن به مسیر legacy؛ شاید مشکل گذرا بوده باشد.
+  if (!mod.ok && !opts.firstOnly) {
+    console.warn(`[modular] retry once: ${mod.error}`);
+    await new Promise((res) => setTimeout(res, 2_000));
+    mod = await runModularGeneration(env, r, engine, generating.id, generationInput, {
+      firstOnly: opts.firstOnly,
+    });
+  }
+
+  if (mod.ok) return { ok: true };
+
+  await markCycleFailed(r, generating.id, mod.error ?? 'modular generation failed');
+  return { ok: false, error: mod.error ?? 'modular generation failed' };
 }
 
 /**

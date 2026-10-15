@@ -58,12 +58,12 @@ describe('jsonSchemaFor — dispatch', () => {
     expect(keys).not.toContain('required');
   });
 
-  it('returns the full-cycle schema for an unknown tag', () => {
+  it('falls back to the lesson schema for an unknown tag', () => {
+    // مسیر legacy «کل چرخهٔ ۷ درسی» حذف شد؛ حالا هر برچسب ناشناخته
+    // به محافظه‌کارانه‌ترین گزینه (تک‌درس) نگاشت می‌شود.
     const s = jsonSchemaFor('cycle') as JsonSchema;
-    const lessons = s.properties!.lessons as JsonSchema;
-    expect(lessons.type).toBe('array');
-    expect(lessons.minItems).toBe(7);
-    expect(lessons.maxItems).toBe(7);
+    expect(Object.keys(s.properties!)).toContain('part1');
+    expect(Object.keys(s.properties!)).not.toContain('lessons');
   });
 });
 
@@ -85,6 +85,28 @@ describe('lesson schema — structural integrity', () => {
     expect(items.type).toBe('array');
     expect(Object.keys(items.items!.properties!)).toEqual(
       expect.arrayContaining(['term', 'meaning', 'example'])
+    );
+  });
+
+  it('does NOT emit the token-wasting fields that the UI never renders', () => {
+    // ⚠️ قفل صرفه‌جویی: این فیلدها تولید و اعتبارسنجی می‌شدند ولی هیچ‌وقت
+    // در UI دیده نمی‌شدند (~۱٬۱۰۰ توکن هدر در هر درس). نباید برگردند
+    // مگر آنکه همزمان در کلاینت هم رندر شوند.
+    const s = jsonSchemaFor('lesson-1') as JsonSchema;
+    const part1 = s.properties!.part1 as JsonSchema;
+    const part2 = s.properties!.part2 as JsonSchema;
+
+    for (const gone of ['explanation', 'pattern', 'patternTranslation', 'microExercises']) {
+      expect(Object.keys(part1.properties!), `part1.${gone} must stay removed`).not.toContain(gone);
+    }
+    for (const gone of ['dialogue', 'scenarioTranslation']) {
+      expect(Object.keys(part2.properties!), `part2.${gone} must stay removed`).not.toContain(gone);
+    }
+
+    // و آنچه واقعاً رندر می‌شود باید بماند
+    expect(Object.keys(part1.properties!)).toEqual(expect.arrayContaining(['type', 'items']));
+    expect(Object.keys(part2.properties!)).toEqual(
+      expect.arrayContaining(['type', 'scenario', 'questions'])
     );
   });
 

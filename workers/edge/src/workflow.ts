@@ -125,7 +125,7 @@ export class CycleGenerationWorkflow extends WorkflowEntrypoint<
   }
 
   /**
-   * صدfaهای تلفچ یک درس: واژه‌ها + مثال‌ها + خطوط دیالوگ.
+   * صدfaهای تلفچ یک درس: واژه‌ها + مثال‌ها.
    *
    * ⚠️ هر کلیپ از `speakText` ساخته می‌شود نه از `example` — چون
    * `speakText` نسخهٔ پاک‌شده از نشانه‌های نوشتاری است.
@@ -150,14 +150,6 @@ export class CycleGenerationWorkflow extends WorkflowEntrypoint<
     };
     for (const item of p1?.items ?? []) {
       const spoken = cleanForSpeech(item.speakText ?? item.example ?? '');
-      if (spoken) texts.push(spoken);
-    }
-
-    const p2 = lesson.part_2_data as {
-      dialogue?: { text?: string; speakText?: string }[];
-    };
-    for (const line of p2?.dialogue ?? []) {
-      const spoken = cleanForSpeech(line.speakText ?? line.text ?? '');
       if (spoken) texts.push(spoken);
     }
 

@@ -77,10 +77,6 @@ export const MOCK_LESSON: Lesson = {
   durationSeconds: null,
   part1: {
     type: 'PATTERN_DRILL',
-    explanation:
-      'در این بخش یاد می‌گیری چطور قیمت را مطرح کنی و درباره انعطاف‌پذیری مذاکره کنی. به جای حفظ کردن فرمول گرامری، الگو را با جایگزین کردن کلمات تمرین می‌کنیم.',
-    pattern: 'Is there any flexibility in the ___?',
-    patternTranslation: 'آیا در ___ انعطاف‌پذیری وجود دارد؟',
     items: [
       {
         term: 'Offer a discount',
@@ -131,37 +127,11 @@ export const MOCK_LESSON: Lesson = {
         box: 1,
       },
     ],
-    microExercises: [
-      {
-        id: 'm301',
-        kind: 'CHOOSE',
-        prompt: 'کدام عبارت مؤدبانه‌تر برای درخواست تخفیف است؟',
-        options: ['Give me a lower price.', 'Is there any flexibility in the price?'],
-        correctIndex: 1,
-        explanation:
-          'عبارت دوم با سؤال و به‌صورت غیرمستقیم مطرح می‌شود و فضای مذاکره را حفظ می‌کند.',
-      },
-      {
-        id: 'm302',
-        kind: 'FILL_BLANK',
-        prompt: 'We can offer a discount for ___ orders.',
-        answer: 'bulk',
-        explanation: '«bulk orders» یعنی سفارش‌های عمده.',
-      },
-    ],
   },
   part2: {
     type: 'REAL_APPLICATION',
     scenario:
       'در یک جلسه کاری، مشتری می‌گوید بودجه‌اش محدود است. تو باید بدون از دست دادن قرارداد، قیمت را مطرح کنی.',
-    scenarioTranslation:
-      'In a business meeting, the client says their budget is limited. You need to quote a price without losing the deal.',
-    dialogue: [
-      { speaker: 'Client', text: 'Honestly, this is above what we planned.', translation: 'راستش، این بالاتر از چیزی است که برنامه‌ریزی کرده بودیم.' },
-      { speaker: 'You', text: 'I understand. Is there any flexibility in your timeline?', translation: 'می‌فهمم. آیا در زمان‌بندی شما انعطافی وجود دارد؟' },
-      { speaker: 'Client', text: 'We could push the start to next quarter.', translation: 'می‌توانیم شروع را به فصل بعد موکول کنیم.' },
-      { speaker: 'You', text: 'Then if we meet halfway, I think we have a deal.', translation: 'پس اگر به میانه راه برسیم، فکر می‌کنم به توافق می‌رسیم.' },
-    ],
     questions: [
       {
         id: 'q101',

@@ -518,45 +518,6 @@ export class ContentRepository {
    * نوشتن چرخه تولیدشده + ۷ درس آن به‌صورت اتمی‌نما.
    * اگر درس‌ها fail شود، چرخه به FAILED می‌رود.
    */
-  async persistGeneratedCycle(
-    cycleId: string,
-    generated: GeneratedCycle,
-    meta: { model: string; ms: number; tokens?: number; input: CycleGenerationInput }
-  ): Promise<void> {
-    await this.db.update('cycles', { id: cycleId }, {
-      title: generated.title,
-      // ⚠️ titleUi جدید است؛ uiTitleOf هر دو نام را می‌پذیرد تا کش قدیمی
-      // (titleFa) هم NULL نوشته نشود.
-      title_fa: uiTitleOf(generated),
-      focus_summary: generated.focusSummary,
-      status: 'ACTIVE',
-      started_at: new Date().toISOString(),
-      generated_from: meta.input.delta as unknown as Record<string, unknown>,
-      generation_model: meta.model,
-      generation_ms: meta.ms,
-      generation_tokens: meta.tokens ?? null,
-    });
-
-    const cycle = await this.getCycleById(cycleId);
-    if (!cycle) throw new Error(`Cycle ${cycleId} vanished after update`);
-
-    const rows = generated.lessons.map((lesson, index) => ({
-      cycle_id: cycleId,
-      user_id: cycle.user_id,
-      day_number: lesson.dayNumber,
-      title: lesson.title,
-      title_fa: uiTitleOf(lesson),
-      kind: lesson.kind,
-      part_1_data: lesson.part1 as unknown as Record<string, unknown>,
-      part_2_data: lesson.part2 as unknown as Record<string, unknown>,
-      status: lesson.dayNumber === 1 ? 'AVAILABLE' : 'LOCKED',
-      is_completed: false,
-      _order: index,
-    }));
-
-    await this.db.insert('lessons', rows.map(({ _order, ...r }) => r));
-  }
-
   // ── تولید ماژولار ─────────────────────────────────────────────────
   // outline → روز ۱ → بقیه در پس‌زمینه
 

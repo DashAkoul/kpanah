@@ -16,7 +16,12 @@ import type { InlineKeyboard } from '../routes/telegram-bot';
  * ═════════════════════════════════════════════════════════════════════
  */
 
-const SETUP_CACHE_KEY = 'bot-ui:setup-done';
+/**
+ * ⚠️ نسخه‌دار است: با تغییر لیست دستورها یا کیبورد، نسخه را بالا ببر
+ * وگرنه کش ۲۴ ساعته مانع اعمال تغییر می‌شود و کاربر همچنان لیست قدیمی
+ * را می‌بیند. v2 = افزودن دستور /menu.
+ */
+const SETUP_CACHE_KEY = 'bot-ui:setup-done:v2';
 const SETUP_TTL_SECONDS = 86_400; // ۲۴ ساعت
 
 /** فراخوانی خام API تلگرام */
@@ -78,8 +83,68 @@ export async function setBotCommands(env: Env): Promise<{ ok: boolean; error?: s
       { command: 'progress', description: '📊 My progress & streak' },
       { command: 'store', description: '⭐ Plans & premium' },
       { command: 'help', description: '❓ Help & support' },
+      { command: 'menu', description: '⌨️ Show the button keyboard' },
     ],
   });
+}
+
+// ═════════════════════════════════════════════════════════════════════
+//  کیبورد ثابت پایین صفحه (ReplyKeyboardMarkup)
+//
+//  ⚠️ چرا جدا از کیبورد inline: دکمه‌های inline داخل **پیام** زندگی
+//  می‌کنند و با اسکرول یا پیام بعدی از دسترس خارج می‌شوند. کیبورد ثابت
+//  همیشه بالای کادر تایپ می‌ماند (`is_persistent`) و کاربر بدون حفظ‌کردن
+//  هیچ دستوری می‌تواند کارهای اصلی را انجام دهد.
+//
+//  ⚠️ دکمه‌های غیر-`web_app` در کیبورد ثابت، **متن برچسب** را به‌عنوان
+//  پیام می‌فرستند (نه callback). پس وبهوک باید همان برچسب را به دستور
+//  نگاشت کند — `replyLabelToCommand` همین کار را می‌کند.
+// ═════════════════════════════════════════════════════════════════════
+
+/** برچسب دکمه‌های کیبورد ثابت — تنها منبع حقیقت برای متن و تطبیق */
+export const REPLY_LABELS = {
+  openApp: '🎓 باز کردن اپلیکیشن',
+  lesson: '📘 درس امروز',
+  progress: '📊 پیشرفت من',
+  store: '⭐ پلن‌ها',
+  help: '❓ راهنما',
+} as const;
+
+export interface ReplyKeyboard {
+  keyboard: { text: string; web_app?: { url: string } }[][];
+  resize_keyboard: boolean;
+  is_persistent: boolean;
+  input_field_placeholder?: string;
+}
+
+/** کیبورد ثابت — دکمهٔ اپ در ردیف اول (تنها دکمهٔ web_app) */
+export function buildReplyKeyboard(env: Env): ReplyKeyboard {
+  const url = env.MINI_APP_URL ?? '';
+  const openApp: { text: string; web_app?: { url: string } } = url
+    ? { text: REPLY_LABELS.openApp, web_app: { url } }
+    : { text: REPLY_LABELS.openApp };
+
+  return {
+    keyboard: [
+      [openApp],
+      [{ text: REPLY_LABELS.lesson }, { text: REPLY_LABELS.progress }],
+      [{ text: REPLY_LABELS.store }, { text: REPLY_LABELS.help }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: 'یک گزینه را انتخاب کن یا / را بزن…',
+  };
+}
+
+/** نگاشت برچسب کیبورد ثابت → دستور. اگر برچسب ناشناخته بود `null`. */
+export function replyLabelToCommand(text: string): string | null {
+  const map: Record<string, string> = {
+    [REPLY_LABELS.lesson]: '/lesson',
+    [REPLY_LABELS.progress]: '/progress',
+    [REPLY_LABELS.store]: '/store',
+    [REPLY_LABELS.help]: '/help',
+  };
+  return map[text.trim()] ?? null;
 }
 
 /**

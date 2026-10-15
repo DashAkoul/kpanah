@@ -5,7 +5,12 @@ import { fulfilStarPayment } from './store';
 import { generateLinkToken, storeLinkToken } from '../lib/link-token';
 import { ContentRepository } from '../services/repository';
 import { SupabaseClient } from '../services/supabase';
-import { ensureBotUi, buildWelcomeKeyboard } from '../services/bot-setup';
+import {
+  ensureBotUi,
+  buildWelcomeKeyboard,
+  buildReplyKeyboard,
+  replyLabelToCommand,
+} from '../services/bot-setup';
 /**
  * Main Telegram bot webhook.
  *
@@ -41,6 +46,17 @@ interface TelegramUpdate {
     total_amount: number;
     invoice_payload: string;
   };
+  /**
+   * ⚠️ باگ رفع‌شده: این فیلد وجود نداشت، پس هیچ دکمهٔ inline‌ای کار
+   * نمی‌کرد. تلگرام برای دکمه‌های `callback_data` یک `callback_query`
+   * می‌فرستد (نه `message`) و Worker نادیده‌اش می‌گرفت.
+   */
+  callback_query?: {
+    id: string;
+    from: TelegramFrom;
+    data?: string;
+    message?: { message_id: number; chat: { id: number } };
+  };
 }
 
 interface TelegramFrom {
@@ -75,6 +91,23 @@ export async function handleTelegramWebhook(
   // با KV کش می‌شود تا حداکثر ۲۴ ساعت یک بار API تلگرام صدا زده شود.
   defer(context, ensureBotUi(env));
 
+  // ── دکمه‌های inline (callback_query) ─────────────────────────────
+  // ⚠️ باگ رفع‌شده: این بخش وجود نداشت. دکمه‌های «پیشرفت من»، «پلن‌ها» و
+  // «راهنما» در پیام /start همه callback بودند و هیچ‌کدام کار نمی‌کرد —
+  // حتی اسپینر دکمه بسته نمی‌شد، چون `answerCallbackQuery` صدا زده نمی‌شد.
+  if (update.callback_query) {
+    const cq = update.callback_query;
+    const chatId = cq.message?.chat?.id;
+
+    // همیشه اول answer بده تا اسپینر دکمه بسته شود (وگرنه کاربر فکر
+    // می‌کند دکمه گیر کرده — همان «هیچ فیدبکی نداره» که گزارش شد).
+    defer(context, answerCallbackQuery(env, cq.id));
+    if (chatId) {
+      defer(context, handleCallback(env, chatId, cq.data ?? '', cq.from));
+    }
+    return jsonSuccess({ ok: true }, requestId, env);
+  }
+
   // ── pre_checkout_query: باید زیر ۱۰ ثانیه پاسخ دهد ────────────────
   if (update.pre_checkout_query) {
     context.waitUntil?.(answerPreCheckout(env, update.pre_checkout_query.id, true));
@@ -94,7 +127,10 @@ export async function handleTelegramWebhook(
   }
 
   // ── دستورات متنی ────────────────────────────────────────────────
-  const text = (message.text ?? '').trim();
+  const rawText = (message.text ?? '').trim();
+  // ⚠️ دکمه‌های کیبورد ثابت، متنِ برچسب را می‌فرستند نه دستور. اینجا
+  // به دستور نگاشت می‌شوند تا همان مسیرهای موجود اجرا شوند.
+  const text = replyLabelToCommand(rawText) ?? rawText;
   const from = message.from;
 
   if (text.startsWith('/start')) {
@@ -130,6 +166,12 @@ export async function handleTelegramWebhook(
   // /store → پلن‌ها
   if (text.startsWith('/store') || text.startsWith('/plans')) {
     defer(context, sendAppButton(env, message.chat.id, from, 'store'));
+    return jsonSuccess({ ok: true }, requestId, env);
+  }
+
+  // /menu → نمایش دوبارهٔ کیبورد ثابت (اگر کاربر آن را بست)
+  if (text.startsWith('/menu')) {
+    defer(context, sendMenu(env, message.chat.id));
     return jsonSuccess({ ok: true }, requestId, env);
   }
 
@@ -179,8 +221,47 @@ async function handleStart(
   const name = from.first_name;
   const text = buildWelcome(from.language_code, name);
 
+  // ⚠️ دو کیبورد هم‌زمان: inline برای میان‌برهای همان پیام، و reply
+  // برای دسترسی دائمی پایین صفحه. تلگرام هر دو را می‌پذیرد.
   await sendMessage(env, chatId, text, {
+    reply_markup: buildReplyKeyboard(env),
+  });
+  await sendMessage(env, chatId, 'یک گزینه را انتخاب کن 👇', {
     reply_markup: buildWelcomeKeyboard(env, startParam),
+  });
+}
+
+/**
+ * دکمه‌های inline — پاسخ به `callback_query`.
+ *
+ * ⚠️ هر شاخه باید چیزی بفرستد وگرنه کاربر فکر می‌کند دکمه خراب است.
+ * شاخهٔ ناشناخته به راهنما می‌افتد (نه سکوت).
+ */
+async function handleCallback(
+  env: Env,
+  chatId: number,
+  data: string,
+  from: TelegramFrom | undefined
+): Promise<void> {
+  switch (data) {
+    case 'my_progress':
+      await sendProgressSummary(env, chatId, from);
+      return;
+    case 'open_store':
+      await sendAppButton(env, chatId, from, 'store');
+      return;
+    case 'help':
+      await sendHelp(env, chatId);
+      return;
+    default:
+      await sendHelp(env, chatId);
+  }
+}
+
+/** پیام «منو» — فقط کیبورد ثابت را دوباره نشان می‌دهد */
+async function sendMenu(env: Env, chatId: number): Promise<void> {
+  await sendMessage(env, chatId, '⌨️ کیبورد دکمه‌ها فعال شد. از پایین صفحه انتخاب کن:', {
+    reply_markup: buildReplyKeyboard(env),
   });
 }
 
@@ -377,12 +458,15 @@ async function sendHelp(env: Env, chatId: number): Promise<void> {
     '/progress — پیشرفت و streak',
     '/store — خرید اشتراک',
     '/help — همین راهنما',
+    '/menu — نمایش کیبورد دکمه‌ها',
     '',
     'در اپلیکیشن می‌توانی:',
     '• درس روزانه‌ات را ببینی',
     '• پیشرفتت را دنبال کنی',
     '• اشتراک بخری',
     '• زبان و هدفت را تغییر دهی',
+    '',
+    'پشتیبانی: در اپلیکیشن → «کاربری» → «پشتیبانی» تیکت بزن؛ سریع جواب می‌گیری.',
   ].join('\n');
 
   await sendMessage(env, chatId, text);
@@ -555,6 +639,28 @@ export async function sendMessage(
     });
   } catch {
     // پیام غیرحیاتی است
+  }
+}
+
+/**
+ * بستن اسپینر دکمهٔ inline.
+ *
+ * ⚠️ اگر این فراخوانی انجام نشود، تلگرام اسپینر دکمه را باز نگه می‌دارد و
+ * کاربر فکر می‌کند دکمه «گیر کرده» — دقیقاً همان چیزی که گزارش شد.
+ */
+async function answerCallbackQuery(env: Env, callbackQueryId: string): Promise<void> {
+  if (!env.TELEGRAM_BOT_TOKEN) return;
+  try {
+    await fetch(
+      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callback_query_id: callbackQueryId }),
+      }
+    );
+  } catch {
+    // بستن اسپینر غیرحیاتی است
   }
 }
 

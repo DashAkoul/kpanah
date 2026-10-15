@@ -598,6 +598,20 @@ export class ContentRepository {
     await this.db.update('cycles', { id: cycleId }, { status: 'FAILED' });
   }
 
+  /**
+   * بازگرداندن چرخهٔ شکست‌خورده به GENERATING برای تلاش مجدد.
+   *
+   * ⚠️ `focus_summary` هم پاک می‌شود: مسیر شکست، **متن خطا** را همان‌جا
+   * نوشته بود (`markCycleFailed`). اگر پاک نشود، UI حتی بعد از شروع
+   * تولید موفق همچنان «Generation failed: …» نشان می‌دهد.
+   */
+  async resetCycleForRetry(cycleId: string): Promise<void> {
+    await this.db.update('cycles', { id: cycleId }, {
+      status: 'GENERATING',
+      focus_summary: null,
+    });
+  }
+
   async getLessonByCycleDay(cycleId: string, dayNumber: number): Promise<LessonRow | null> {
     const rows = await this.db.select<LessonRow>('lessons', {
       cycle_id: `eq.${cycleId}`,

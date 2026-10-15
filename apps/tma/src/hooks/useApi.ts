@@ -73,6 +73,31 @@ export interface HomeData {
   generationError?: string | null;
 }
 
+/**
+ * تلاش مجدد برای چرخهٔ شکست‌خورده.
+ *
+ * ⚠️ چرا mutation جدا و نه فقط `refetch`: چرخهٔ FAILED با refetch همان
+ * وضعیت را برمی‌گرداند و هیچ اتفاقی نمی‌افتد — کاربر فکر می‌کرد دکمه
+ * خراب است. این mutation واقعاً تولید را از سر می‌گیرد.
+ */
+export function useRetryCycle() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (): Promise<{ ok: boolean; via: string; alreadyGenerating?: boolean }> => {
+      if (MOCK) {
+        await new Promise((r) => setTimeout(r, 900));
+        return { ok: true, via: 'inline' };
+      }
+      return api.retryCycle();
+    },
+    onSuccess: () => {
+      // وضعیت چرخه عوض شده → خانه را دوباره بخوان
+      void queryClient.invalidateQueries({ queryKey: ['home'] });
+    },
+  });
+}
+
 export function useHome() {
   const status = useSessionStore((s) => s.status);
 

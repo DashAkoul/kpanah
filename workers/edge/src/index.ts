@@ -16,6 +16,7 @@ import {
   handleGetTodayLesson,
   handleTelemetry,
   handleCompleteLesson,
+  handleRetryCycle,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -395,6 +396,8 @@ async function dispatch(
       return handleTelemetry(request, context);
     case 'complete-lesson':
       return handleCompleteLesson(request, context);
+    case 'retry-cycle':
+      return handleRetryCycle(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

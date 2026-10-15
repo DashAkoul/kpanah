@@ -72,6 +72,9 @@ export default {
       generating: 'Preparing your next cycle…',
       generatingHint: 'The AI is building lessons from your performance.',
       generationFailed: 'Lesson generation failed',
+      retryStarted: 'Regeneration started…',
+      retryAlreadyRunning: 'Generation is already running',
+      retryFailed: 'Could not restart — please try again',
       generationFailedHint:
         'The AI engine did not respond. This is usually temporary — we will retry in a few minutes. If it persists, please contact support.',
       lockedTitle: 'Program locked',

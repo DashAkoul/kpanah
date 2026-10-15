@@ -507,6 +507,54 @@ export async function handleCompleteLesson(
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=retry-cycle
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * تلاش مجدد برای چرخه‌ای که تولیدش شکست خورده.
+ *
+ * ⚠️ باگ رفع‌شده: دکمهٔ «تلاش مجدد» در UI فقط `refetch` می‌زد — یعنی
+ * همان وضعیت FAILED را دوباره می‌خواند و **هیچ اتفاقی نمی‌افتاد**، بدون
+ * هیچ فیدبکی. کاربر فکر می‌کرد دکمه خراب است.
+ *
+ * حالا واقعاً: وضعیت را به GENERATING برمی‌گرداند و تولید را زمان‌بندی
+ * می‌کند (همان مسیر Workflow → Queue → inline).
+ */
+export async function handleRetryCycle(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const cycle = await r.getLatestCycle(user.id);
+  if (!cycle) {
+    return jsonError('NOT_FOUND', 'no cycle to retry', requestId, env, 404);
+  }
+
+  // اگر چرخه سالم است، دوباره تولید نکن (idempotent + محافظ هزینهٔ AI)
+  if (cycle.status === 'GENERATING') {
+    return jsonSuccess(
+      { ok: true, via: 'none', alreadyGenerating: true },
+      requestId,
+      env
+    );
+  }
+  if (cycle.status === 'ACTIVE') {
+    return jsonSuccess({ ok: true, via: 'none', alreadyActive: true }, requestId, env);
+  }
+
+  await r.resetCycleForRetry(cycle.id);
+  const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
+
+  return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
 // Cycle generation worker (shared by inline fallback and QStash)
 // ═════════════════════════════════════════════════════════════════════
 

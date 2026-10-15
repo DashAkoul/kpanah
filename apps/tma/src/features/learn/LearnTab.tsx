@@ -2,8 +2,9 @@ import { useTranslation } from 'react-i18next';
 import { Card, Button, ProgressBar } from '../../components/ui';
 import { Roadmap } from './Roadmap';
 import { LessonCard } from './LessonCard';
-import { useHome } from '../../hooks/useApi';
+import { useHome, useRetryCycle } from '../../hooks/useApi';
 import { useSessionStore } from '../../store/session';
+import { useUiStore } from '../../store/ui';
 
 /**
  * Learn tab.
@@ -17,8 +18,33 @@ import { useSessionStore } from '../../store/session';
  */
 export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const { t } = useTranslation();
-  const { data, isLoading, error, refetch } = useHome();
+  const { data, isLoading, isRefetching, error, refetch } = useHome();
   const user = useSessionStore((s) => s.user);
+  const retry = useRetryCycle();
+  const showToast = useUiStore((s) => s.showToast);
+
+  /**
+   * دکمهٔ «تلاش مجدد».
+   *
+   * ⚠️ باگ رفع‌شده: قبلاً فقط `refetch` می‌زد → همان وضعیت FAILED برمی‌گشت
+   * و کاربر هیچ فیدبکی نمی‌گرفت («شبیه دکمه رفتار نمی‌کند»). حالا تولید
+   * واقعاً از سر گرفته می‌شود، دکمه حالت loading می‌گیرد و نتیجه با toast
+   * اعلام می‌شود — هم موفق هم خطا.
+   */
+  const handleRetry = () => {
+    retry.mutate(undefined, {
+      onSuccess: (res) => {
+        if (res.alreadyGenerating) {
+          showToast(t('learn.retryAlreadyRunning'), 'info');
+          return;
+        }
+        showToast(t('learn.retryStarted'), 'success');
+      },
+      onError: () => {
+        showToast(t('learn.retryFailed'), 'error');
+      },
+    });
+  };
 
   if (isLoading) {
     return (
@@ -31,12 +57,24 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
     );
   }
 
+  // ⚠️ این شاخه «خطای شبکه» است نه «شکست تولید» — اکشن درست `refetch`
+  // است (دوباره خواندن)، نه `retryCycle` (شروع تولید از نو).
   if (error || !data) {
     return (
       <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
         <span className="text-4xl">📡</span>
         <p className="text-sm text-text-hint">{t('errors.network')}</p>
-        <Button variant="secondary" size="sm" onClick={() => void refetch()}>
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={isRefetching}
+          onClick={() => {
+            // فیدبک لازم است: بدون آن کاربر نمی‌داند دکمه کار کرد یا نه
+            void refetch().then((res) => {
+              if (res.isError) showToast(t('errors.network'), 'error');
+            });
+          }}
+        >
           {t('common.retry')}
         </Button>
       </div>
@@ -62,7 +100,12 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
             {data.generationError.slice(0, 200)}
           </p>
         )}
-        <Button variant="secondary" size="sm" onClick={() => void refetch()}>
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={retry.isPending}
+          onClick={handleRetry}
+        >
           {t('common.retry')}
         </Button>
       </div>
@@ -72,10 +115,7 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   // ── 3. Generating / no cycle ──────────────────────────────────────
   if (!data.cycle) {
     return (
-      <GeneratingState
-        generating={data.generating}
-        onRefresh={() => void refetch()}
-      />
+      <GeneratingState generating={data.generating} onRefresh={handleRetry} />
     );
   }
 

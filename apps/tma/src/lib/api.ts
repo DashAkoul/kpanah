@@ -401,6 +401,8 @@ export const api = {
 
   home: () => callApi<unknown>('home'),
   getTodayLesson: () => callApi<unknown>('get-today-lesson'),
+  /** تلاش مجدد برای چرخهٔ شکست‌خورده (دکمهٔ «تلاش مجدد» در تب آموزش) */
+  retryCycle: () => callApi<{ ok: boolean; via: string }>('retry-cycle', { method: 'POST' }),
   progress: () => callApi<unknown>('progress'),
 
   completeLesson: (body: unknown) =>

@@ -190,6 +190,63 @@ export const generatedLessonSchema = z
   )
   .transform(withUiTitleOutput);
 
+// ─────────────────────────────────────────────────────────────────────
+// «اسکلت» درس — تولید دو مرحله‌ای (صرفه‌جویی توکن)
+//
+//  ⚠️ ایده: بخش گران‌قیمت هر درس، جزئیات هر واژه است (معنا، تلفظ، مثال،
+//  ترجمه). این جزئیات **بین همهٔ کاربران مشترک‌اند** و یک بار در جدول
+//  `term_cards` ذخیره می‌شوند. پس لازم نیست مدل هر بار از نو بسازدشان.
+//
+//  مرحلهٔ A (این اسکیما): مدل فقط ساختار درس را می‌دهد — صحنه، سوال‌ها،
+//  و **فهرست واژه‌ها** (فقط `term`). برای واژه‌هایی که کارت ندارند،
+//  جزئیات را در `newCards` برمی‌گرداند تا یک بار برای همیشه ذخیره شوند.
+//
+//  مرحلهٔ B: سرور جزئیات را از `term_cards` پر می‌کند (صفر توکن اضافه).
+// ─────────────────────────────────────────────────────────────────────
+
+/** آیتم اسکلت — فقط واژه و (اختیاری) الگوی جایگزینی */
+export const skeletonItemSchema = z.object({
+  term: nonEmpty(120),
+  substitution: substitutionSchema.optional(),
+});
+
+/** کارت واژه‌ای که مدل برای واژه‌های **ناشناخته** می‌سازد */
+export const newTermCardSchema = z.object({
+  term: nonEmpty(120),
+  meaning: nonEmpty(200),
+  pronunciation: z.string().max(120).optional(),
+  example: nonEmpty(400),
+  exampleTranslation: z.string().max(400).optional(),
+});
+
+export const lessonSkeletonSchema = z
+  .object({
+    dayNumber: z.number().int().min(1).max(7),
+    title: nonEmpty(150),
+    kind: lessonKindSchema,
+    part1: z.object({
+      type: z.literal('PATTERN_DRILL'),
+      items: z.array(skeletonItemSchema).min(3).max(12),
+    }),
+    // ⚠️ بخش ۲ کامل می‌ماند: صحنه و سوال‌ها به همین درس/روز وابسته‌اند
+    // و بین کاربران مشترک نیستند، پس کش‌کردنشان معنا ندارد.
+    part2: realApplicationPartSchema,
+    /**
+     * کارت واژه‌های تازه — فقط واژه‌هایی که در فهرست «شناخته‌شده» نبودند.
+     * اگر همه شناخته‌شده باشند، این فیلد خالی/غایب است (صفر توکن).
+     */
+    newCards: z.array(newTermCardSchema).max(12).optional(),
+  })
+  .merge(uiTitleSchema)
+  .refine(hasUiTitle, { message: 'a title in the learner UI language is required' })
+  .refine((l) => l.dayNumber !== 7 || l.kind === 'CONSOLIDATION', {
+    message: 'Day 7 must be CONSOLIDATION',
+  })
+  .refine((l) => l.dayNumber !== 6 || l.kind === 'HIDDEN_ASSESSMENT', {
+    message: 'Day 6 must be HIDDEN_ASSESSMENT',
+  })
+  .transform(withUiTitleOutput);
+
 export const generatedCycleSchema = z
   .object({
     title: nonEmpty(150),

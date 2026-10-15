@@ -48,6 +48,12 @@ export interface Env {
    * `false` = کش کاملاً مشترک (ارزان‌تر، ولی شخصی‌سازی اسمی).
    */
   PERSONALIZED_CACHE?: string;
+  /**
+   * تولید دو مرحله‌ای درس: «اسکلت» (صحنه + سوال + فهرست واژه) و بعد پر
+   * کردن جزئیات از کش سطح واژه. پیش‌فرض `true`. `false` = مسیر
+   * تک‌فراخوانی قدیمی (گران‌تر ولی ساده‌تر).
+   */
+  TWO_STAGE_LESSON?: string;
 
   /**
    * Master secret for encrypting AI provider keys that admins enter through

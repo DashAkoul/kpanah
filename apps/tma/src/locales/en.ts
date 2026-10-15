@@ -97,6 +97,9 @@ export default {
       explanation: 'Explanation',
       example: 'Example',
       meaning: 'Meaning',
+      listen: 'Listen',
+      playing: 'Playing',
+      loadingAudio: 'Loading…',
       scenario: 'Scenario',
       dialogue: 'Dialogue',
       finishPart: 'Finish part {{part}}',
@@ -347,6 +350,19 @@ export default {
         explain:
           'Engines are tried top to bottom. If one fails, the app automatically switches to the next one so lesson generation never stops.',
         chain: 'Current order',
+        kindLabel: 'Provider category',
+        kind: {
+          TEXT: 'Text',
+          TTS: 'TTS',
+          STT: 'STT',
+        },
+        kindHint: {
+          TEXT: 'Language models that build lessons, examples and dialogues — these spend tokens.',
+          TTS: 'Text-to-speech engines for pronouncing words and sentences. Each clip is built once and stored for every learner.',
+          STT: 'Speech-to-text engines for pronunciation practice. Not active yet.',
+        },
+        emptyThisKind: 'No provider registered in {kind}',
+
         empty: 'No engine added yet',
         addProvider: 'Add engine',
         editProvider: 'Edit engine',

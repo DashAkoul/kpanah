@@ -254,7 +254,7 @@ export const MOCK_ADMIN_USERS = [
 export const MOCK_AI_PROVIDERS = {
   providers: [
     {
-      id: 'p1', label: 'Gemini Flash (اصلی)', protocol: 'gemini' as const, vendor: 'gemini',
+      id: 'p1', label: 'Gemini Flash (اصلی)', protocol: 'gemini' as const, kind: 'TEXT' as const, vendor: 'gemini',
       model: 'gemini-2.5-flash', baseUrl: null, keyHint: '••••4Xk2', fromEnv: false,
       priority: 1, isActive: true, temperature: 0.8, maxOutputTokens: 32768,
       supportsJsonSchema: true, healthStatus: 'healthy' as const, lastError: null,
@@ -264,7 +264,7 @@ export const MOCK_AI_PROVIDERS = {
       note: 'provider اصلی تولید چرخه', usable: true,
     },
     {
-      id: 'p2', label: 'DeepSeek (جایگزین اول)', protocol: 'openai_compatible' as const, vendor: 'deepseek',
+      id: 'p2', label: 'DeepSeek (جایگزین اول)', protocol: 'openai_compatible' as const, kind: 'TEXT' as const, vendor: 'deepseek',
       model: 'deepseek-chat', baseUrl: null, keyHint: '••••9ab7', fromEnv: false,
       priority: 2, isActive: true, temperature: 0.8, maxOutputTokens: 8192,
       supportsJsonSchema: false, healthStatus: 'degraded' as const,
@@ -275,7 +275,7 @@ export const MOCK_AI_PROVIDERS = {
       note: null, usable: true,
     },
     {
-      id: 'p3', label: 'Claude Sonnet (جایگزین دوم)', protocol: 'anthropic' as const, vendor: 'anthropic',
+      id: 'p3', label: 'Claude Sonnet (جایگزین دوم)', protocol: 'anthropic' as const, kind: 'TEXT' as const, vendor: 'anthropic',
       model: 'claude-3-5-sonnet-latest', baseUrl: null, keyHint: 'env', fromEnv: true,
       priority: 3, isActive: true, temperature: 0.8, maxOutputTokens: 8192,
       supportsJsonSchema: false, healthStatus: 'healthy' as const, lastError: null,

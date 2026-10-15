@@ -15,12 +15,14 @@ import type {
   UserProfile,
   AdminUserSummary,
   QualitativeSkill,
+  TermCard,
 } from '@kpanah/shared';
 import {
   CYCLE_LENGTH_DAYS,
   PLAN_DURATION_DAYS,
   buildCycleDays,
   dayProfile,
+  uiTitleOf,
   daysRemaining,
   evaluateAccess,
   lessonKindForDay,
@@ -523,7 +525,9 @@ export class ContentRepository {
   ): Promise<void> {
     await this.db.update('cycles', { id: cycleId }, {
       title: generated.title,
-      title_fa: generated.titleFa,
+      // ⚠️ titleUi جدید است؛ uiTitleOf هر دو نام را می‌پذیرد تا کش قدیمی
+      // (titleFa) هم NULL نوشته نشود.
+      title_fa: uiTitleOf(generated),
       focus_summary: generated.focusSummary,
       status: 'ACTIVE',
       started_at: new Date().toISOString(),
@@ -541,7 +545,7 @@ export class ContentRepository {
       user_id: cycle.user_id,
       day_number: lesson.dayNumber,
       title: lesson.title,
-      title_fa: lesson.titleFa,
+      title_fa: uiTitleOf(lesson),
       kind: lesson.kind,
       part_1_data: lesson.part1 as unknown as Record<string, unknown>,
       part_2_data: lesson.part2 as unknown as Record<string, unknown>,
@@ -570,7 +574,7 @@ export class ContentRepository {
   ): Promise<void> {
     await this.db.update('cycles', { id: cycleId }, {
       title: outline.title,
-      title_fa: outline.titleFa,
+      title_fa: uiTitleOf(outline),
       focus_summary: outline.focusSummary,
       status: 'GENERATING',
       started_at: new Date().toISOString(),
@@ -587,7 +591,7 @@ export class ContentRepository {
       user_id: cycle.user_id,
       day_number: d.dayNumber,
       title: d.title,
-      title_fa: d.titleFa,
+      title_fa: uiTitleOf(d),
       kind: d.kind,
       // مرحلهٔ ۸ — هدف آموزشی روز (برای تولید پس‌زمینهٔ همان روز)
       objective: d.objective ?? dayProfile(d.dayNumber).objective,
@@ -1045,6 +1049,8 @@ export class ContentRepository {
   async createAiProvider(input: {
     label: string;
     protocol: string;
+    /** دستهٔ provider: TEXT | TTS | STT (مِیگرشن ۰۰۱۱) */
+    kind?: string;
     vendor: string;
     model: string;
     baseUrl: string | null;
@@ -1063,6 +1069,7 @@ export class ContentRepository {
     const row = await this.db.insert<AiProviderRow>('ai_providers', {
       label: input.label,
       protocol: input.protocol,
+      kind: input.kind ?? 'TEXT',
       vendor: input.vendor,
       model: input.model,
       base_url: input.baseUrl,
@@ -1605,6 +1612,167 @@ export class ContentRepository {
   }
 
   /** همهٔ کاربرانی که می‌توان به آن‌ها پیام همگانی فرستاد */
+  // ───────────────────────────────────────────────────────────────────
+  // Media files (R2) — مِیگرشن ۰۰۱۲
+  // ───────────────────────────────────────────────────────────────────
+
+  /** یافتن فایل با کلید معنوی (جلوگیری از تولید دوبارهٔ صوت) */
+  async findMediaByOwnerKey(
+    kind: string,
+    ownerKey: string
+  ): Promise<{
+    id: string;
+    storage_key: string;
+    mime_type: string;
+    byte_size: number;
+    duration_ms: number | null;
+  } | null> {
+    try {
+      const rows = asRows(
+        await this.db.select<Record<string, unknown>>('media_files', {
+          kind: `eq.${kind}`,
+          owner_key: `eq.${ownerKey}`,
+          select: 'id,storage_key,mime_type,byte_size,duration_ms',
+          limit: '1',
+        })
+      );
+      const row = rows[0];
+      if (!row) return null;
+      return {
+        id: String(row.id),
+        storage_key: String(row.storage_key),
+        mime_type: String(row.mime_type ?? 'audio/mpeg'),
+        byte_size: Number(row.byte_size ?? 0),
+        duration_ms: row.duration_ms === null ? null : Number(row.duration_ms),
+      };
+    } catch {
+      // جدول media_files وجود ندارد (مهاجرت اجرا نشده) → انگار چیزی نیست
+      return null;
+    }
+  }
+
+  /** ثبت/به‌روزرسانی ردیف فایل رسانه */
+  async upsertMediaFile(input: {
+    kind: string;
+    storageKey: string;
+    ownerKey: string;
+    language: string;
+    voice: string;
+    mimeType: string;
+    byteSize: number;
+    source: string;
+  }): Promise<void> {
+    await this.db.insert(
+      'media_files',
+      {
+        kind: input.kind,
+        storage_key: input.storageKey,
+        owner_key: input.ownerKey,
+        language: input.language,
+        voice: input.voice,
+        mime_type: input.mimeType,
+        byte_size: input.byteSize,
+        source: input.source,
+      },
+      { upsertOn: 'kind,owner_key' }
+    );
+  }
+
+  // ───────────────────────────────────────────────────────────────────
+  // Term cards — مِیگرشن ۰۰۱۳ (صرفه‌جویی توکن + ثبات محتوا)
+  // ───────────────────────────────────────────────────────────────────
+
+  /** کارت‌های واژه‌های موجود برای یک زبان — قبل از تولید AI چک می‌شود */
+  async findTermCards(
+    language: string,
+    uiLanguage: string,
+    terms: string[]
+  ): Promise<Record<string, TermCard>> {
+    if (terms.length === 0) return {};
+    try {
+      // نام‌های کوچک برای تطبیق
+      const lowered = terms.map((t) => t.trim().toLowerCase());
+      const rows = asRows(
+        await this.db.select<Record<string, unknown>>('term_cards', {
+          language: `eq.${language}`,
+          ui_language: `eq.${uiLanguage}`,
+          select: 'term,meaning,pronunciation,example,example_translation,audio_key',
+          limit: String(lowered.length * 4),
+        })
+      );
+      const wanted = new Set(lowered);
+      const out: Record<string, TermCard> = {};
+      for (const r of rows) {
+        const term = String(r.term ?? '').trim().toLowerCase();
+        if (!wanted.has(term)) continue;
+        out[term] = {
+          term: String(r.term ?? ''),
+          meaning: String(r.meaning ?? ''),
+          pronunciation: r.pronunciation ? String(r.pronunciation) : undefined,
+          example: r.example ? String(r.example) : undefined,
+          exampleTranslation: r.example_translation
+            ? String(r.example_translation)
+            : undefined,
+          audioKey: r.audio_key ? String(r.audio_key) : undefined,
+        };
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  /** ذخیرهٔ کارت‌های واژه (اگر کلمه در DB نبود، AI ساخته و اینجا ذخیره می‌شود) */
+  async saveTermCards(language: string, uiLanguage: string, cards: TermCard[]): Promise<void> {
+    if (cards.length === 0) return;
+    const rows = cards.map((c) => ({
+      term: c.term,
+      language,
+      ui_language: uiLanguage,
+      meaning: c.meaning,
+      pronunciation: c.pronunciation ?? null,
+      example: c.example ?? null,
+      example_translation: c.exampleTranslation ?? null,
+      audio_key: c.audioKey ?? null,
+    }));
+    try {
+      await this.db.insert('term_cards', rows, { upsertOn: 'language,term,ui_language' });
+    } catch {
+      // اگر مهاجرت اجرا نشده باشد، بی‌صدا رد شو
+    }
+  }
+
+  /** افزایش شمارندهٔ استفادهٔ کارت‌ها (وقتی در یک درس به کار رفتند) */
+  async bumpTermCardUse(language: string, uiLanguage: string, terms: string[]): Promise<void> {
+    if (terms.length === 0) return;
+    const lowered = terms.map((t) => t.trim().toLowerCase());
+    for (const term of lowered) {
+      this.db
+        .rpc('bump_term_card_use', {
+          p_language: language,
+          p_ui_language: uiLanguage,
+          p_terms: [term],
+        })
+        .catch(() => {});
+    }
+  }
+
+  /** آمار کش — چند بار در ماه از کش خوانده شده (معیار صرفه‌جویی توکن) */
+  async getCacheStats(): Promise<{ entries: number; totalHits: number }> {
+    try {
+      const rows = asRows(
+        await this.db.select<Record<string, unknown>>('content_cache', {
+          select: 'hits',
+          limit: '5000',
+        })
+      );
+      const totalHits = rows.reduce((sum, r) => sum + Number(r.hits ?? 0), 0);
+      return { entries: rows.length, totalHits };
+    } catch {
+      return { entries: 0, totalHits: 0 };
+    }
+  }
+
   async listAllTelegramIds(): Promise<{ id: string; telegram_id: number; ui_language: string }[]> {
     try {
       const rows = await this.db.select<{ id: string; telegram_id: number; ui_language: string }>(
@@ -1850,7 +2018,7 @@ function buildQualitativeSkills(input: {
   ];
 
   return defs.map(({ condition, ...skill }) => ({ ...skill, unlocked: condition }));
-}
+  }
 
 function buildSkillBreakdown(lexical: LexicalRow[], accuracyPct: number): { area: string; score: number }[] {
   const byBox = [1, 2, 3, 4, 5].map(

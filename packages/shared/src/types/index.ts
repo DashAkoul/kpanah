@@ -29,6 +29,16 @@ export type LessonStatus = 'LOCKED' | 'AVAILABLE' | 'IN_PROGRESS' | 'COMPLETED';
 
 export type LessonKind = 'TEACHING' | 'HIDDEN_ASSESSMENT' | 'CONSOLIDATION';
 
+/**
+ * دستهٔ provider هوش مصنوعی (مِیگرشن ۰۰۱۱).
+ *
+ * چرا: زنجیرهٔ failover برای «تولید متن» نباید مدل صوتی را امتحان کند.
+ * با این Enum هر بخش زنجیرهٔ خودش را از دیتابیس می‌خواند.
+ *
+ * ⚠️ مقدار پیش‌فرض `TEXT` است تا ردیف‌های موجود بدون مهاجرت دستی کار کنند.
+ */
+export type AiProviderKind = 'TEXT' | 'TTS' | 'STT';
+
 export type SkillLevel = 'ZERO' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
 
 /**
@@ -121,9 +131,20 @@ export interface UserProfile {
 export interface PatternDrillItem {
   term: string;
   meaning: string;
+  /**
+   * تلفظ لاتین — فقط وقتی خط زبان هدف لاتین نیست (مثل فارسی/عربی/چینی).
+   * برای انگلیسی بی‌معنی است و تولید نمی‌شود.
+   */
   pronunciation?: string;
   example: string;
   exampleTranslation?: string;
+  /**
+   * متنی که واقعاً باید به صوت تبدیل شود (مِیگرشن ۰۰۱۱ + بازبینی پرامپت).
+   * ⚠️ چرا جدا از `example`: جملهٔ مثال ممکن است نشانه‌های لازم برای گفتار
+   * (توقف، تأکید) یا شکل‌های نوشتاری (پرانتز، حضrx) داشته باشد. این فیلد
+   * نسخهٔ «خواندنی» است تا TTS ورودی تمیز بگیرد.
+   */
+  speakText?: string;
   /** الگوی جایگزینی: جمله پایه + اسلات‌های قابل تعویض */
   substitution?: {
     base: string;
@@ -177,6 +198,8 @@ export interface DialogueLine {
   speaker: string;
   text: string;
   translation?: string;
+  /** نسخهٔ «خواندنی» برای TTS (پاک‌شده از نشانه‌های نوشتاری) */
+  speakText?: string;
 }
 
 export type Part1Data = PatternDrillPart;
@@ -279,7 +302,10 @@ export interface CycleGenerationInput {
 
 export interface GeneratedCycle {
   title: string;
-  titleFa: string;
+  /** زبان رابط کاربر — نام جدید (یافتهٔ ۶) */
+  titleUi: string;
+  /** @deprecated فقط برای کش قدیمی */
+  titleFa?: string;
   focusSummary: string;
   lessons: GeneratedLesson[];
 }
@@ -287,7 +313,9 @@ export interface GeneratedCycle {
 export interface GeneratedLesson {
   dayNumber: number;
   title: string;
-  titleFa: string;
+  titleUi: string;
+  /** @deprecated فقط برای کش قدیمی */
+  titleFa?: string;
   kind: LessonKind;
   part1: Part1Data;
   part2: Part2Data;
@@ -302,11 +330,13 @@ export interface GeneratedLesson {
 export interface OutlineDay {
   dayNumber: number;
   title: string;
-  titleFa: string;
+  titleUi: string;
+  /** @deprecated فقط برای کش قدیمی */
+  titleFa?: string;
   kind: LessonKind;
   /**
    * هدف آموزشی روز (مرحلهٔ ۸). اختیاری است تا چرخه‌های قدیمی که در
-   * `content_cache` نشسته‌اند هم without crash بخوانند؛ اگر نبود، کد از
+   * `content_cache` نشسته‌اند هم بدون خطا بخوانند؛ اگر نبود، کد از
    * `dayProfile(dayNumber)` استفاده می‌کند.
    */
   objective?: string;
@@ -315,9 +345,47 @@ export interface OutlineDay {
 
 export interface CycleOutline {
   title: string;
-  titleFa: string;
+  titleUi: string;
+  /** @deprecated فقط برای کش قدیمی */
+  titleFa?: string;
   focusSummary: string;
   days: OutlineDay[];
+}
+
+/**
+ * کارت واژه — مِیگرشن ۰۰۱۳ (بهینه‌سازی ۴: کش در سطح واژه).
+ *
+ * چرا جدا از درس: یک واژه در ده‌ها درس مختلف استفاده می‌شود. اگر جزئیاتش
+ * (معنا، تلفظ، مثال، صوت) در کارت مستقل باشد:
+ *   • هر بار از دیتابیس خوانده می‌شود نه AI → توکن کم
+ *   • یک واژه همیشه یک ترجمه و یک مثال دارد → ثبات یادگیری
+ *   • تولید صوت هر واژه فقط یک بار برای همهٔ کاربران
+ */
+export interface TermCard {
+  /** واژه در زبان هدف (همان‌طور که در درس دیده می‌شود) */
+  term: string;
+  meaning: string;
+  pronunciation?: string;
+  example?: string;
+  exampleTranslation?: string;
+  /** کلید فایل صوت در media_files — اگر تولید شده باشد */
+  audioKey?: string;
+}
+
+/** ردیف `media_files` — لینک فایل در DB، خود فایل در R2 (مِیگرشن ۰۰۱۲) */
+export interface MediaFile {
+  id: string;
+  kind: 'AUDIO' | 'IMAGE';
+  /** کلید آبجکت در R2 */
+  storageKey: string;
+  /** کلید معنایی برای یافتن تکراری‌ها — مثلاً 'tts:en:default:abc123' */
+  ownerKey: string;
+  language: string | null;
+  voice: string | null;
+  mimeType: string;
+  byteSize: number;
+  durationMs: number | null;
+  source: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -399,6 +467,8 @@ export interface AiProvider {
   id: string;
   label: string;
   protocol: AiProtocol;
+  /** دستهٔ provider: TEXT (تولید متن) | TTS | STT — مِیگرشن ۰۰۱۱ */
+  kind: AiProviderKind;
   vendor: string;
   model: string;
   baseUrl: string | null;
@@ -449,6 +519,8 @@ export interface AiProviderListResponse {
 export interface CreateAiProviderInput {
   label: string;
   protocol: AiProtocol;
+  /** دستهٔ provider — پیش‌فرض TEXT */
+  kind?: AiProviderKind;
   vendor: string;
   model: string;
   baseUrl?: string | null;

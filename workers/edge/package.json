@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@kpanah/shared": "*",
+    "aws4fetch": "^1.0.20",
     "zod": "^3.23.8"
   },
   "devDependencies": {

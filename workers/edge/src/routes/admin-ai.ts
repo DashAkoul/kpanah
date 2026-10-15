@@ -112,6 +112,7 @@ export async function handleAdminCreateProvider(
   const row = await r.createAiProvider({
     label: input.label,
     protocol: input.protocol,
+    kind: input.kind ?? 'TEXT',
     vendor: input.vendor,
     model: input.model,
     baseUrl: input.baseUrl ?? null,
@@ -610,6 +611,9 @@ function toProviderDto(row: AiProviderRow, usable: boolean): Record<string, unkn
     id: row.id,
     label: row.label,
     protocol: row.protocol,
+    // دستهٔ provider (مِیگرشن ۰۰۱۱) — پنل با همین سه بخش می‌سازد
+    kind: (row.kind ?? 'TEXT').toUpperCase(),
+
     vendor: row.vendor,
     model: row.model,
     baseUrl: row.base_url,

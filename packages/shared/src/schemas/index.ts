@@ -42,20 +42,84 @@ export const planTypeSchema = z.enum([
 ]);
 
 // ─────────────────────────────────────────────────────────────────────
+// عنوان به زبان رابط کاربری (یافتهٔ ۶ بازبینی)
+//
+// قبلاً فیلد `titleFa` بود، انگار زبان رابط همیشه فارسی است — که درست
+// نیست (UI پنج زبان دارد). نام جدید `titleUi` است.
+//
+// ⚠️ سازگاری با گذشته: `content_cache` ممکن است outline/درس قدیمی با
+// `titleFa` داشته باشد. اگر آن را الزامی نگه داریم، کش قدیمی می‌شکند.
+// پس هر دو را می‌پذیریم و `uiTitleOf()` تصمیم می‌گیرد کدام خوانده شود.
+// ─────────────────────────────────────────────────────────────────────
+
+const uiTitleSchema = z.object({
+  titleUi: nonEmpty(150).optional(),
+  /** @deprecated از نسخهٔ ۰۲ محتوا به بعد `titleUi` استفاده می‌شود */
+  titleFa: nonEmpty(150).optional(),
+});
+
+/**
+ * خروجی را نرمال می‌کند تا `titleUi` **همیشه** پر باشد.
+ *
+ * ⚠️ چرا این transform لازم است: اگر فقط `.merge(uiTitleSchema)` بزنیم،
+ * `titleUi` در نوع خروجی اختیاری می‌ماند و کل کد داخلی که آن را می‌خواند
+ * خطای TypeScript می‌گیرد. این transform در پایان زنجیره اجرا می‌شود و
+ * عنوان زبان رابط را از هر کدام از دو نام ممکن پر می‌کند.
+ */
+function withUiTitleOutput<T extends { titleUi?: string; titleFa?: string }>(
+  value: T
+): T & { titleUi: string } {
+  return { ...value, titleUi: value.titleUi ?? value.titleFa ?? '' };
+}
+
+/** عنوان زبان رابط را از هر دو نام ممکن برمی‌گرداند */
+export function uiTitleOf(row: { titleUi?: string; titleFa?: string }): string {
+  return row.titleUi ?? row.titleFa ?? '';
+}
+
+/** آیا حداقل یکی از دو عنوان موجود است؟ */
+export function hasUiTitle(row: { titleUi?: string; titleFa?: string }): boolean {
+  return Boolean(row.titleUi ?? row.titleFa);
+}
+
+/**
+ * عنوان زبان رابط را روی `titleUi` نرمال می‌کند.
+ *
+ * ⚠️ چرا لازم است: `content_cache` ممکن است outline/درس قدیمی با `titleFa`
+ * داشته باشد. کد داخلی فقط `titleUi` می‌خواند؛ بدون این نرمال‌سازی، یک
+ * ردیف کش‌شده باعث crash یا عنوان خالی می‌شود. هر جا محتوا از کش یا DB
+ * خوانده می‌شود باید از این عبور کند.
+ */
+export function normalizeCycleTitles<T extends { titleUi?: string; titleFa?: string }>(row: T): T {
+  if (row.titleUi) return row;
+  if (row.titleFa) return { ...row, titleUi: row.titleFa };
+  return row;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Lesson parts
 // ─────────────────────────────────────────────────────────────────────
 
 export const substitutionSchema = z.object({
   base: nonEmpty(300),
-  slots: z.array(nonEmpty(80)).min(2).max(8),
+  // ⚠️ یافتهٔ ۸ بازبینی: قبلاً min(2) بود و الگویی با یک خانه (مثل
+  // «I want ___») مدل را می‌شکست. حداقل ۱ اسلات معتبر است.
+  slots: z.array(nonEmpty(80)).min(1).max(8),
 });
 
 export const patternDrillItemSchema = z.object({
   term: nonEmpty(120),
   meaning: nonEmpty(200),
+  // یافتهٔ ۲ بازبینی: تلفظ لاتین فقط وقتی معنا دارد که خط هدف لاتین
+  // نباشد. برای انگلیسی تولید نمی‌شود (پرامپت آن را شرطی می‌کند).
   pronunciation: z.string().max(120).optional(),
   example: nonEmpty(400),
   exampleTranslation: z.string().max(400).optional(),
+  /**
+   * یافتهٔ ۷ بازبینی: نسخهٔ خواندنی برای TTS. از نشانه‌های نوشتاری
+   * (پرانتز، خط تیره، حضrx) پاک است تا موتور صدا جمله را درست بخواند.
+   */
+  speakText: z.string().max(400).optional(),
   substitution: substitutionSchema.optional(),
   /**
    * box به‌صورت literal union تعریف می‌شود تا خروجی infer شده با
@@ -98,6 +162,8 @@ export const dialogueLineSchema = z.object({
   speaker: nonEmpty(60),
   text: nonEmpty(400),
   translation: z.string().max(400).optional(),
+  // نسخهٔ خواندنی برای TTS (یافتهٔ ۷)
+  speakText: z.string().max(400).optional(),
 });
 
 export const applicationQuestionSchema = z
@@ -129,11 +195,12 @@ export const generatedLessonSchema = z
   .object({
     dayNumber: z.number().int().min(1).max(7),
     title: nonEmpty(150),
-    titleFa: nonEmpty(150),
     kind: lessonKindSchema,
     part1: patternDrillPartSchema,
     part2: realApplicationPartSchema,
   })
+  .merge(uiTitleSchema)
+  .refine(hasUiTitle, { message: 'a title in the learner UI language is required' })
   .refine(
     (l) => l.dayNumber !== 7 || l.kind === 'CONSOLIDATION',
     { message: 'Day 7 must be CONSOLIDATION' }
@@ -141,44 +208,51 @@ export const generatedLessonSchema = z
   .refine(
     (l) => l.dayNumber !== 6 || l.kind === 'HIDDEN_ASSESSMENT',
     { message: 'Day 6 must be HIDDEN_ASSESSMENT' }
-  );
+  )
+  .transform(withUiTitleOutput);
 
 export const generatedCycleSchema = z
   .object({
     title: nonEmpty(150),
-    titleFa: nonEmpty(150),
     focusSummary: nonEmpty(600),
     lessons: z.array(generatedLessonSchema).length(7),
   })
+  .merge(uiTitleSchema)
+  .refine(hasUiTitle, { message: 'a title in the learner UI language is required' })
   .refine(
     (c) => {
       const days = c.lessons.map((l) => l.dayNumber).sort((a, b) => a - b);
       return days.every((d, i) => d === i + 1);
     },
     { message: 'Cycle must contain exactly days 1..7, each once' }
-  );
+  )
+  .transform(withUiTitleOutput);
 
 // ─────────────────────────────────────────────────────────────────────
 // طرح کلی چرخه (تولید ماژولار: outline → روز ۱ → بقیه در پس‌زمینه)
 // ─────────────────────────────────────────────────────────────────────
 
-export const outlineDaySchema = z.object({
-  dayNumber: z.number().int().min(1).max(7),
-  title: nonEmpty(150),
-  titleFa: nonEmpty(150),
-  kind: lessonKindSchema,
-  // مرحلهٔ ۸ — هدف آموزشی هر روز. اختیاری برای سازگاری با کش قدیمی.
-  objective: z.string().max(400).optional(),
-  objectiveFa: z.string().max(400).optional(),
-});
+export const outlineDaySchema = z
+  .object({
+    dayNumber: z.number().int().min(1).max(7),
+    title: nonEmpty(150),
+    kind: lessonKindSchema,
+    // مرحلهٔ ۸ — هدف آموزشی هر روز. اختیاری برای سازگاری با کش قدیمی.
+    objective: z.string().max(400).optional(),
+    objectiveFa: z.string().max(400).optional(),
+  })
+  .merge(uiTitleSchema)
+  .refine(hasUiTitle, { message: 'a title in the learner UI language is required' })
+  .transform(withUiTitleOutput);
 
 export const cycleOutlineSchema = z
   .object({
     title: nonEmpty(150),
-    titleFa: nonEmpty(150),
     focusSummary: nonEmpty(600),
     days: z.array(outlineDaySchema).length(7),
   })
+  .merge(uiTitleSchema)
+  .refine(hasUiTitle, { message: 'a title in the learner UI language is required' })
   .refine(
     (c) => {
       const days = c.days.map((d) => d.dayNumber).sort((a, b) => a - b);
@@ -191,7 +265,8 @@ export const cycleOutlineSchema = z
   })
   .refine((c) => c.days[6]?.kind === 'CONSOLIDATION', {
     message: 'Day 7 must be CONSOLIDATION',
-  });
+  })
+  .transform(withUiTitleOutput);
 
 // ─────────────────────────────────────────────────────────────────────
 // Delta report (input to AI — we also validate our own output)
@@ -372,6 +447,12 @@ export const adminGiftSchema = z.object({
 export const aiProtocolSchema = z.enum(['gemini', 'openai_compatible', 'anthropic']);
 
 /**
+ * دستهٔ provider (مِیگرشن ۰۰۱۱): TEXT / TTS / STT.
+ * ⚠️ پیش‌فرض TEXT است تا ردیف‌های موجود بدون مهاجرت دستی کار کنند.
+ */
+export const aiProviderKindSchema = z.enum(['TEXT', 'TTS', 'STT']).default('TEXT');
+
+/**
  * Wire-compatible vendor presets the panel offers as a starting point.
  * `custom` means the admin fills every field by hand.
  */
@@ -390,6 +471,8 @@ export const createAiProviderSchema = z
   .object({
     label: z.string().min(1).max(80),
     protocol: aiProtocolSchema,
+    // دستهٔ provider — پیش‌فرض TEXT (سازگاری با گذشته)
+    kind: aiProviderKindSchema,
     vendor: z.string().min(1).max(40),
     model: z.string().min(1).max(120),
     baseUrl: z.string().url().max(300).nullish(),

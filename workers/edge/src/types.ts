@@ -65,6 +65,30 @@ export interface Env {
   RATE_LIMIT_KV?: KVNamespace;
   CACHE_KV?: KVNamespace;
 
+  // ذخیره‌سازی رسانه — S3 سازگار (Backblaze B2).
+  // ⚠️ R2 کلادفلر در ایران در دسترس نیست، پس به B2 مهاجرت کردیم. B2
+  // binding نیتیو ندارد → با امضای SigV4 و HTTP کار می‌کند (`services/s3.ts`).
+  // اختیاری: اگر پیکربندی نشود، صوت تولید نمی‌شود ولی بقیهٔ اپ کار می‌کند.
+  /** endpoint مثل `https://s3.eu-central-003.backblazeb2.com` */
+  MEDIA_S3_ENDPOINT?: string;
+  /** نام باکس، مثل `kpanah-media` */
+  MEDIA_S3_BUCKET?: string;
+  /** منطقه (اختیاری — از endpoint استخراج می‌شود) */
+  MEDIA_S3_REGION?: string;
+  /** keyID باکس — **secret** */
+  MEDIA_S3_KEY_ID?: string;
+  /** applicationKey باکس — **secret** */
+  MEDIA_S3_APP_KEY?: string;
+
+  /** آدرس پایهٔ سرو کردن فایل‌ها (route خود ما) */
+  MEDIA_URL_BASE?: string;
+
+  // TTS — سرویس آنلاین تبدیل متن به صوت (بدون AI)
+  /** آدرس سرویس؛ پیش‌فرض Google Translate TTS */
+  TTS_BASE_URL?: string;
+  /** فقط برای لاگ: نام موتور صوتی */
+  TTS_PROVIDER?: string;
+
   // Queues (تولید پس‌زمینه) — اختیاری؛ اگر binding نباشد fallback اجرا می‌شود
   GENERATION_QUEUE?: {
     send(message: unknown): Promise<void>;

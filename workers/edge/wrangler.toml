@@ -62,6 +62,18 @@ binding = "CYCLE_WORKFLOW"
 class_name = "CycleGenerationWorkflow"
 
 # ─────────────────────────────────────────────────────────────────────
+# ذخیره‌سازی رسانه — Backblaze B2 (S3-compatible)
+#
+# ⚠️ R2 کلادفلر در ایران در دسترس نیست، پس به B2 مهاجرت کردیم. B2 binding
+# نیتیو Cloudflare ندارد → از S3 API با امضای SigV4 استفاده می‌شود
+# (`services/s3.ts` + کتابخانهٔ aws4fetch).
+#
+# ⚠️ کلیدها **secret** هستند و این‌جا نمی‌آیند:
+#   npx wrangler secret put MEDIA_S3_KEY_ID
+#   npx wrangler secret put MEDIA_S3_APP_KEY
+# ─────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────
 # Secrets (با `wrangler secret put NAME` تنظیم کنید — در فایل نگذارید)
 #
 #   TELEGRAM_BOT_TOKEN
@@ -77,6 +89,8 @@ class_name = "CycleGenerationWorkflow"
 #   GEMINI_API_KEY
 #   DEEPSEEK_API_KEY
 #   ANTHROPIC_API_KEY
+#   MEDIA_S3_KEY_ID        ← keyID باکس B2
+#   MEDIA_S3_APP_KEY       ← applicationKey باکس B2
 # ─────────────────────────────────────────────────────────────────────
 
 [vars]
@@ -89,6 +103,21 @@ ENABLE_PAYLOAD_ENCRYPTION = "false"
 MODULAR_GENERATION = "true"
 BACKGROUND_BUDGET_MS = "20000"
 RATE_LIMIT_PER_MINUTE = "60"
+
+# ── تبدیل متن به صوت (سرویس آنلاین، بدون AI) ───────────────────────
+# موتور پیش‌فرض رایگان است و برای تلفچ کوتاه کافی است. برای تعویض:
+#   TTS_BASE_URL = "https://your-tts-service.example/tts?text="
+TTS_PROVIDER = "online-tts"
+
+# ── ذخیره‌سازی رسانه (Backblaze B2 — S3 compatible) ─────────────────
+MEDIA_S3_ENDPOINT = "https://s3.eu-central-003.backblazeb2.com"
+MEDIA_S3_BUCKET = "kpanah-media"
+MEDIA_S3_REGION = "eu-central-003"
+# ⚠️ لینک صوت باید **مطلق** باشد. فرانت روی دامنهٔ دیگری است
+# (app.infolange.kdns.fr)؛ اگر مسیر نسبی برگردد، مرورگر آن را نسبت به
+# origin فرانت حل می‌کند → ۴۰۴. (کلاینت هم fallback دارد، ولی این‌جا
+# درست ست می‌کنیم تا هر مصرف‌کننده‌ای لینک سالم بگیرد.)
+MEDIA_URL_BASE = "https://api.infolange.kdns.fr/kpanah56/8fjg7rfb/v1/media"
 RATE_LIMIT_PER_DAY = "2000"
 FREE_TRIAL_DAYS = "7"
 CYCLE_STALL_DAYS = "12"

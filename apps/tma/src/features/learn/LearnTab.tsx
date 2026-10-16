@@ -113,7 +113,16 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   }
 
   // ── 3. Generating / no cycle ──────────────────────────────────────
-  if (!data.cycle) {
+  //
+  // ⚠️ باگ رفع‌شده: قبلاً اول `!data.cycle` چک می‌شد و بعد `!data.lesson`.
+  // اما وقتی چرخه تازه ساخته شده (onboarding)، `cycle` هست ولی `lesson`
+  // هنوز `null` است چون محتوا در حال تولید است. نتیجه: کاربر تازه‌ای که
+  // هیچ درسی نرفته بود، به‌جای اسپینر «در حال تولید»، صفحهٔ «برنامه قفل
+  // شد» را می‌دید — گمراه‌کننده‌ترین حالت ممکن.
+  //
+  // رفع: اگر `generating` روشن است (یا چرخه‌ای وجود ندارد)، همیشه حالت
+  // تولید را نشان بده — حتی وقتی شیء چرخه در پاسخ هست.
+  if (data.generating || !data.cycle) {
     return (
       <GeneratingState generating={data.generating} onRefresh={handleRetry} />
     );

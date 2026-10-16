@@ -117,6 +117,15 @@ export function useHome() {
       return api.home() as Promise<HomeData>;
     },
     staleTime: 30_000,
+    /**
+     * ⚠️ وقتی تولید در جریان است، هر ۵ ثانیه poll کن تا کاربر خودش درسِ
+     * آماده‌شده را ببیند (بدون نیاز به رفرش دستی). وقتی تولید تمام شد
+     * (`generating: false`)، polling متوقف می‌شود.
+     */
+    refetchInterval: (query) => {
+      const data = query.state.data as HomeData | undefined;
+      return data?.generating ? 5_000 : false;
+    },
   });
 }
 // ─────────────────────────────────────────────────────────────────────

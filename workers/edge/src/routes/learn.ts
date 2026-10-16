@@ -120,6 +120,29 @@ export async function handleHome(
       ? await r.getLessonsForCycle(generatingCycle.id)
       : [];
 
+    // ⚠️ باگ رفع‌شده: اگر چرخه‌ای COMPLETED شده و هنوز چرخهٔ جدیدی
+    // GENERATING نشده، `cycle: null` برمی‌گشت و UI به‌جای صفحهٔ «قفل»،
+    // خطای شبکه نشان می‌داد. حالا آخرین چرخه (حتی COMPLETED) را
+    // برمی‌گردانیم تا `CycleCompleteState` رندر شود.
+    if (!generatingCycle) {
+      const latest = await r.getLatestCycle(user.id);
+      if (latest) {
+        const latestLessons = await r.getLessonsForCycle(latest.id);
+        return jsonSuccess(
+          {
+            user: profile,
+            cycle: toCycleDto(latest, latestLessons),
+            lesson: null,
+            generating: false,
+            generationStatus: null,
+            generationError: null,
+          },
+          requestId,
+          env
+        );
+      }
+    }
+
     return jsonSuccess(
       {
         user: profile,
@@ -463,22 +486,27 @@ export async function handleCompleteLesson(
   let nextCycleTriggered = false;
   let generationDeferred: string | null = null;
 
-  if (allDone) {
-    await r.markCycleCompleted(lesson.cycle_id);
-  }
-
   const cycle = await r.getCycleById(lesson.cycle_id);
   const generating = await r.getGeneratingCycle(user.id);
 
+  /**
+   * ⚠️ باگ رفع‌شده: `shouldGenerateNextCycle` را **قبل** از
+   * `markCycleCompleted` صدا می‌زنیم. قبلاً اول وضعیت را `COMPLETED`
+   * می‌کردیم و بعد `shouldGenerateNextCycle` را با `cycleStatus: 'COMPLETED'`
+   * صدا می‌زدیم — اما آن تابع فقط وقتی `true` برمی‌گرداند که
+   * `cycleStatus === 'ACTIVE'` باشد (شرط `allComplete` فقط در شاخهٔ ACTIVE
+   * چک می‌شود). نتیجه: هیچ‌وقت چرخهٔ جدیدی ساخته نمی‌شد و کاربر برای
+   * همیشه در حالت «قفل» می‌ماند.
+   */
   const decision = shouldGenerateNextCycle({
-    cycleStatus: allDone ? 'COMPLETED' : 'ACTIVE',
+    cycleStatus: 'ACTIVE',
     completedDays,
     cycleStartedAt: cycle?.started_at ? new Date(cycle.started_at) : null,
     stallDays: Number(env.CYCLE_STALL_DAYS ?? 12),
     hasGeneratingCycle: Boolean(generating),
   });
 
-  if (decision.shouldGenerate && cycle) {
+  if (allDone && decision.shouldGenerate && cycle) {
     const nextNumber = cycle.cycle_number + 1;
     await r.createGeneratingCycle(user.id, nextNumber);
 
@@ -486,8 +514,12 @@ export async function handleCompleteLesson(
     const via = await scheduleCycleGeneration(context, user.id, nextNumber);
     nextCycleTriggered = true;
     generationDeferred = via.via;
-  } else if (decision.reason === 'CALENDAR_PAUSED_STALL') {
+  } else if (allDone && decision.reason === 'CALENDAR_PAUSED_STALL') {
     generationDeferred = 'calendar_paused';
+  }
+
+  if (allDone) {
+    await r.markCycleCompleted(lesson.cycle_id);
   }
 
   return jsonSuccess(

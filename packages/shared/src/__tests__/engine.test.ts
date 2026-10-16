@@ -328,6 +328,23 @@ describe('shouldGenerateNextCycle', () => {
     });
     expect(r.reason).toBe('CALENDAR_PAUSED_STALL');
   });
+
+  /**
+   * ⚠️ ایمنی: اگر چرخه قبلاً COMPLETED شده ولی همهٔ روزها کامل‌اند،
+   * تولید چرخهٔ جدید باید همچنان امکان‌پذیر باشد (مثلاً از طریق کرون
+   * یا retry-cycle). این تست رگرسیون برای باگی است که `markCycleCompleted`
+   * قبل از `shouldGenerateNextCycle` صدا زده می‌شد و وضعیت COMPLETED
+   * باعث می‌شد هیچ‌وقت چرخهٔ جدیدی ساخته نشود.
+   */
+  it('recovers generation for a COMPLETED cycle with all days done', () => {
+    const r = shouldGenerateNextCycle({
+      cycleStatus: 'COMPLETED',
+      completedDays: [1, 2, 3, 4, 5, 6, 7],
+      cycleStartedAt: startedTwoDaysAgo,
+    });
+    expect(r.shouldGenerate).toBe(true);
+    expect(r.reason).toBe('CYCLE_COMPLETE_RECOVERY');
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════

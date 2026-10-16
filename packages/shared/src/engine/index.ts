@@ -270,6 +270,7 @@ export interface ShouldGenerateResult {
   shouldGenerate: boolean;
   reason:
     | 'CYCLE_COMPLETE'
+    | 'CYCLE_COMPLETE_RECOVERY'
     | 'CYCLE_IN_PROGRESS'
     | 'ALREADY_GENERATING'
     | 'CALENDAR_PAUSED_STALL'
@@ -307,6 +308,16 @@ export function shouldGenerateNextCycle(
 
   if (input.cycleStatus === 'ACTIVE' && allComplete) {
     return { shouldGenerate: true, reason: 'CYCLE_COMPLETE' };
+  }
+
+  /**
+   * ⚠️ ایمنی: اگر چرخه قبلاً COMPLETED شده ولی همهٔ روزها کامل‌اند،
+   * احتمالاً تولید چرخهٔ جدید از دست رفته (مثلاً به خاطر ری‌استارت
+   * Worker بین `markCycleCompleted` و `createGeneratingCycle`). این
+   * شاخه اجازه می‌دهد کرون یا تلاش مجدد چرخهٔ جدید را بسازد.
+   */
+  if (input.cycleStatus === 'COMPLETED' && allComplete) {
+    return { shouldGenerate: true, reason: 'CYCLE_COMPLETE_RECOVERY' };
   }
 
   const daysElapsed = diffInDays(input.cycleStartedAt, now);

@@ -73,37 +73,17 @@ export async function runBackgroundGeneration(
   let failed = 0;
   let retried = 0;
 
-  // ── الف) چرخه‌های نیمه‌کاره ───────────────────────────────────────
+  // ⚠️ ترتیب مهم است: درس‌ها **اول**.
   //
-  // ⚠️ باگ رفع‌شده: قبلاً فقط چرخه‌های GENERATING **بدون ردیف درس** دیده
-  // می‌شدند. چرخه‌ای که ردیف درس داشت (روزها پر شده بودند) ولی ACTIVE نشده
-  // بود، هرگز توسط کرون ترمیم نمی‌شد و کاربر تا ابد اسپینر می‌دید.
-  // حالا چرخه‌های GENERATING قدیمی‌تر از ۱۰ دقیقه بررسی می‌شوند:
-  //   • روز ۱ محتوا دارد → فقط فعال‌سازی (صفر هزینهٔ AI)
-  //   • روز ۱ خالی است → تولید دوباره
-  const stuck = await r.listStaleGeneratingCycles(10 * 60_000, maxCycles);
-  for (const c of stuck) {
-    if (Date.now() - t0 > budgetMs) break;
-    const lessons = await r.getLessonsForCycle(c.id);
-    const day1 = lessons.find((l) => l.day_number === 1);
-    const day1Ready =
-      day1?.part_1_data && Object.keys(day1.part_1_data as object).length > 0;
-    if (day1Ready) {
-      await r.activateCycleWithFirstLesson(c.id);
-      cycles += 1;
-      continue;
-    }
-    const res = await runCycleGeneration(env, c.user_id, c.cycle_number, { firstOnly: true });
-    if (res.ok) cycles += 1;
-    else failed += 1;
-  }
+  // تجربهٔ عملی: تولید یک چرخهٔ گیرکرده می‌تواند کل بودجهٔ ۶۰ ثانیه‌ای کرون
+  // را با یک timeout بخورد و هیچ درسی ساخته نشود (لاگ: lessons=0 failed=1).
+  // کاربر مستقیماً درس روز بعد را می‌خواهد، پس اول او.
+  const lessonsBudget = Math.floor(budgetMs * 0.6);
 
-  // ── ب) درس‌های خالی ──────────────────────────────────────────────
-  // ⚠️ شامل محتوای **قدیمی** هم می‌شود، نه فقط خالی — وگرنه بعد از هر
-  // افزایش نسخهٔ محتوا، درس‌های آماده‌شده هرگز بازتولید نمی‌شدند.
+  // ── الف) درس‌هایی که محتوا لازم دارند (خالی یا نسخهٔ قدیمی) ─────────
   const missing = await r.listLessonsNeedingContent(LESSON_CONTENT_VERSION, maxLessons);
   for (const l of missing) {
-    if (Date.now() - t0 > budgetMs) break;
+    if (Date.now() - t0 > lessonsBudget) break;
     const res = await runLessonGeneration(
       env,
       l.user_id,
@@ -115,20 +95,45 @@ export async function runBackgroundGeneration(
     else failed += 1;
   }
 
-  // ── ج) چرخه‌های FAILED قدیمی (تلاش دوباره با فاصله) ────────────────
-  // ⚠️ فقط چرخه‌هایی که بیش از ۳۰ دقیقه پیش شکسته‌اند. اگر سهمیهٔ AI
-  // تمام باشد، تلاش سریع دوباره هم دقیقاً همان خطا را می‌دهد و فقط
-  // سهمیه را می‌سوزاند. با این فاصله، AI وقتی واقعاً برگشته تلاش می‌شود.
-  const staleMinutes = 30;
-  const failedCycles = await r.listFailedCyclesForRetry(
-    staleMinutes * 60_000,
-    maxCycles
-  );
-  for (const c of failedCycles) {
-    if (Date.now() - t0 > budgetMs) break;
-    const res = await runCycleGeneration(env, c.user_id, c.cycle_number, { firstOnly: true });
-    if (res.ok) retried += 1;
+  // ── ب) چرخه‌های نیمه‌کاره (بودجهٔ جدا) ──────────────────────────────
+  //
+  // چرخه‌ای که ردیف درس دارد ولی ACTIVE نشده، هرگز ترمیم نمی‌شد.
+  // روز ۱ آماده → فعال‌سازی (صفر هزینهٔ AI)؛ وگرنه تولید دوباره.
+  const cyclesStart = Date.now();
+  const stuck = await r.listStaleGeneratingCycles(10 * 60_000, maxCycles);
+  for (const cyc of stuck) {
+    if (Date.now() - cyclesStart > budgetMs - lessonsBudget) break;
+    const cycLessons = await r.getLessonsForCycle(cyc.id);
+    const day1 = cycLessons.find((l) => l.day_number === 1);
+    const day1Ready =
+      day1?.part_1_data && Object.keys(day1.part_1_data as object).length > 0;
+    if (day1Ready) {
+      await r.activateCycleWithFirstLesson(cyc.id);
+      cycles += 1;
+      continue;
+    }
+    const res = await runCycleGeneration(env, cyc.user_id, cyc.cycle_number, {
+      firstOnly: true,
+    });
+    if (res.ok) cycles += 1;
     else failed += 1;
+  }
+
+  // ── ج) چرخه‌های FAILED قدیمی (فقط اگر زمانی مانده باشد) ─────────────
+  if (Date.now() - t0 < budgetMs) {
+    const staleMinutes = 30;
+    const failedCycles = await r.listFailedCyclesForRetry(
+      staleMinutes * 60_000,
+      maxCycles
+    );
+    for (const cyc of failedCycles) {
+      if (Date.now() - t0 > budgetMs) break;
+      const res = await runCycleGeneration(env, cyc.user_id, cyc.cycle_number, {
+        firstOnly: true,
+      });
+      if (res.ok) retried += 1;
+      else failed += 1;
+    }
   }
 
   return { cycles, lessons, failed, retried };

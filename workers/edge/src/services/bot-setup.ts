@@ -118,11 +118,16 @@ export interface ReplyKeyboard {
 }
 
 /** کیبورد ثابت — دکمهٔ اپ در ردیف اول (تنها دکمهٔ web_app) */
-export function buildReplyKeyboard(env: Env): ReplyKeyboard {
-  const url = env.MINI_APP_URL ?? '';
-  const openApp: { text: string; web_app?: { url: string } } = url
-    ? { text: REPLY_LABELS.openApp, web_app: { url } }
-    : { text: REPLY_LABELS.openApp };
+export function buildReplyKeyboard(_env: Env): ReplyKeyboard {
+  /**
+   * ⚠️ باگ رفع‌شده: دکمهٔ `web_app` داخل **کیبورد ثابت** (ReplyKeyboard)
+   * در تلگرام دسکتاپ/برخی کلاینت‌ها اپ را **بدون initData** باز می‌کند →
+   * صفحهٔ «تلگرام اطلاعات ورود را نفرستاد» و قفل کامل اپ.
+   *
+   * راه‌حل: این دکمه فقط متن می‌فرستد؛ وبهوک آن را به `/app` نگاشت می‌کند و
+   * ربات یک دکمهٔ **inline** با توکن یک‌بارمصرف می‌فرستد (مسیر مطمئن).
+   */
+  const openApp = { text: REPLY_LABELS.openApp };
 
   return {
     keyboard: [
@@ -143,6 +148,7 @@ export function replyLabelToCommand(text: string): string | null {
     [REPLY_LABELS.progress]: '/progress',
     [REPLY_LABELS.store]: '/store',
     [REPLY_LABELS.help]: '/help',
+    [REPLY_LABELS.openApp]: '/app',
   };
   return map[text.trim()] ?? null;
 }

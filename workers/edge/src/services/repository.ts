@@ -370,6 +370,60 @@ export class ContentRepository {
    * ماژولار هنوز ساخته نشده‌اند. کرون این‌ها را از قبل می‌سازد تا کاربر
    * انتظار نکشد.
    */
+  /**
+   * درس‌هایی که محتوا لازم دارند: یا خالی‌اند (`{}`) یا نسخهٔ محتوایشان
+   * قدیمی است (`_cv` ≠ نسخهٔ فعلی).
+   *
+   * ⚠️ باگ رفع‌شده: کوئری قبلی فقط `part_1_data = {}` را می‌گرفت. بعد از
+   * بالا رفتن `LESSON_CONTENT_VERSION`، درس‌های روز ۲..۷ محتوای قدیمی
+   * داشتند (نه خالی) و **هیچ‌وقت بازتولید نمی‌شدند** → کاربر بعد از تکمیل
+   * روز ۱ تا ابد «چرخه بعدی در حال آماده‌سازی» می‌دید.
+   */
+  async listLessonsNeedingContent(
+    version: number,
+    limit = 4
+  ): Promise<
+    { id: string; cycle_id: string; user_id: string; day_number: number; cycle_number: number }[]
+  > {
+    try {
+      const rows = await this.db.select<{
+        id: string;
+        cycle_id: string;
+        user_id: string;
+        day_number: number;
+        part_1_data: Record<string, unknown> | null;
+      }>('lessons', {
+        select: 'id,cycle_id,user_id,day_number,part_1_data',
+        is_completed: 'eq.false',
+        order: 'day_number.asc',
+        limit: String(limit * 8),
+      });
+
+      const out: {
+        id: string;
+        cycle_id: string;
+        user_id: string;
+        day_number: number;
+        cycle_number: number;
+      }[] = [];
+
+      for (const l of asRows(rows)) {
+        const p1 = (l.part_1_data ?? {}) as Record<string, unknown>;
+        const empty = Object.keys(p1).length === 0;
+        const stale = !empty && p1._cv !== version;
+        if (!empty && !stale) continue;
+
+        const cycle = await this.getCycleById(l.cycle_id);
+        if (!cycle) continue;
+        out.push({ ...l, cycle_number: cycle.cycle_number });
+        if (out.length >= limit) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
   async listLessonsMissingContent(
     limit = 4
   ): Promise<

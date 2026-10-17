@@ -1,7 +1,11 @@
 import type { Env } from '../types';
 import { ContentRepository } from './repository';
 import { SupabaseClient } from './supabase';
-import { runCycleGeneration, runLessonGeneration } from '../routes/learn';
+import {
+  LESSON_CONTENT_VERSION,
+  runCycleGeneration,
+  runLessonGeneration,
+} from '../routes/learn';
 
 /**
  * ═════════════════════════════════════════════════════════════════════
@@ -95,7 +99,9 @@ export async function runBackgroundGeneration(
   }
 
   // ── ب) درس‌های خالی ──────────────────────────────────────────────
-  const missing = await r.listLessonsMissingContent(maxLessons);
+  // ⚠️ شامل محتوای **قدیمی** هم می‌شود، نه فقط خالی — وگرنه بعد از هر
+  // افزایش نسخهٔ محتوا، درس‌های آماده‌شده هرگز بازتولید نمی‌شدند.
+  const missing = await r.listLessonsNeedingContent(LESSON_CONTENT_VERSION, maxLessons);
   for (const l of missing) {
     if (Date.now() - t0 > budgetMs) break;
     const res = await runLessonGeneration(

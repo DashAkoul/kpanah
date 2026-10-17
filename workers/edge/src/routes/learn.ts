@@ -206,6 +206,18 @@ export async function handleHome(
   // روز ۱ (که هرگز به صف نمی‌رود) یا وقتی صف تنظیم نشده اجرا می‌شود.
   const useQueue = Boolean(env.GENERATION_QUEUE);
   const inlineAllowed = !useQueue || current?.day_number === 1;
+
+  // ⚠️ اگر محتوا آماده نیست و تولید inline مجاز نیست (روز ۲..۷ با صف)،
+  // باید **به صف** سپرده شود؛ وگرنه صفحه تا ابد «در حال آماده‌سازی» می‌ماند.
+  if (current && !currentReady && !inlineAllowed && env.GENERATION_QUEUE) {
+    void env.GENERATION_QUEUE.send({
+      kind: 'generate-lesson',
+      userId: user.id,
+      cycleId: activeCycle.id,
+      cycleNumber: activeCycle.cycle_number,
+      dayNumber: current.day_number,
+    }).catch(() => undefined);
+  }
   if (current && !currentReady && inlineAllowed) {
     const gen = await runLessonGeneration(
       env,
@@ -1146,7 +1158,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-const LESSON_CONTENT_VERSION = 4;
+export const LESSON_CONTENT_VERSION = 5;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -1447,6 +1459,26 @@ function normalizeDrillChoices(lesson: GeneratedLesson): GeneratedLesson {
       const ci = next.substitution.correctIndex;
       if (ci === undefined || ci < 0 || ci >= slots.length) {
         next.substitution = { ...next.substitution, correctIndex: 0 };
+      }
+
+      /**
+       * ⚠️ باگ رفع‌شده: مدل اغلب `base` را از **خودِ جملهٔ مثال** می‌سازد
+       * (مثال: «My phone number is 0912…» → «My ___ is 0912…»). نتیجه:
+       * «الگو» عملاً همان مثالی است که کاربر لحظهٔ قبل دیده — هیچ تمرینی
+       * نیست. اگر جملهٔ کامل‌شده با مثال یکی باشد، الگو را حذف می‌کنیم.
+       */
+      const normalize = (v: string) =>
+        v
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+      const hasBlank = /_{2,}/.test(next.substitution.base);
+      const filled = next.substitution.base.replace(/_{2,}/, slots[next.substitution.correctIndex ?? 0] ?? '');
+
+      if (!hasBlank || normalize(filled) === normalize(next.example)) {
+        delete next.substitution;
       }
     }
 

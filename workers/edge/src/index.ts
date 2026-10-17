@@ -116,10 +116,15 @@ export default {
           // هنوز احراز هویتی انجام نشده).
           const limited = await enforceRateLimit(request, { env, requestId });
           if (limited) return withCors(limited, origin);
-          return await handleMediaSpeak(request, { env, requestId });
+          // ⚠️ باگ رفع‌شده: پاسخ این مسیر CORS نداشت. preflight (OPTIONS) هدر
+          // را می‌گرفت ولی پاسخ واقعی POST نه → مرورگر پاسخ را بلاک می‌کرد و
+          // دکمهٔ «گوش کن» در اپ هیچ کاری نمی‌کرد (بدون هیچ خطای مرئی).
+          return withCors(await handleMediaSpeak(request, { env, requestId }), origin);
         }
         if (media.route === 'file' && request.method === 'GET' && media.key) {
-          return await handleMediaFile(media.key, { env, requestId });
+          // فایل صوتی هم CORS می‌گیرد تا `<audio>`/fetch روی دامنهٔ فرانت
+          // بدون مشکل پخش شود.
+          return withCors(await handleMediaFile(media.key, { env, requestId }), origin);
         }
         return new Response('Not Found', { status: 404 });
       } catch (err) {

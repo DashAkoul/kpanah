@@ -108,6 +108,9 @@ export default {
       dialogue: 'Dialogue',
       finishPart: 'Finish part {{part}}',
       completing: 'Saving…',
+      pickOne: 'Pick one',
+      yourSentence: 'Your sentence',
+      audioFailed: 'Playback failed — tap again',
       listenAgain: 'Listen again',
     },
     profile: {

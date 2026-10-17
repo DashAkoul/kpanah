@@ -37,48 +37,81 @@ export function useAudio() {
   const [error, setError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const play = useCallback(async (text: string, language: string) => {
-    const trimmed = text?.trim();
-    if (!trimmed) return;
+  /**
+   * ⚠️ کش URL در حافظه — برای سازگاری با WebView تلگرام.
+   *
+   * در iOS/WKWebView، `audio.play()` فقط داخل «ژست کاربر» مجاز است. اگر قبل
+   * از play یک `await fetch(...)` باشد، ژست باطل می‌شود و play با
+   * NotAllowedError رد می‌شود (همان «دکمه کار نمی‌کند»). با کش کردن URL،
+   * بار دوم (و بعد از یک بار خطا) پخش **مستقیماً** و بدون await شبکه انجام
+   * می‌شود.
+   */
+  const urlCache = useRef<Map<string, string>>(new Map());
 
-    setError(null);
-    setLoading(true);
-    setPlaying(false);
+  const startPlayback = useCallback(async (url: string) => {
+    audioRef.current?.pause();
 
-    try {
-      const res = await fetch(`${API_BASE}${SPEAK_PATH}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: trimmed, language }),
-      });
+    const audio = new Audio(absoluteMediaUrl(url));
+    audioRef.current = audio;
+    audio.onended = () => setPlaying(false);
+    audio.onerror = () => {
+      setPlaying(false);
+      setError('playback failed');
+    };
 
-      const payload = (await res.json().catch(() => null)) as SpeakPayload | null;
-      const url = payload?.data?.url;
-      if (!res.ok || !payload?.ok || !url) {
-        throw new Error(payload?.error?.message || 'speech synthesis failed');
+    await audio.play();
+    setLoading(false);
+    setPlaying(true);
+  }, []);
+
+  const play = useCallback(
+    async (text: string, language: string) => {
+      const trimmed = text?.trim();
+      if (!trimmed) return;
+
+      setError(null);
+      const cacheKey = `${language}:${trimmed}`;
+      const cachedUrl = urlCache.current.get(cacheKey);
+
+      setLoading(true);
+      setPlaying(false);
+
+      // مسیر سریع: URL از قبل داریم → پخش فوری، بدون await شبکه
+      if (cachedUrl) {
+        try {
+          await startPlayback(cachedUrl);
+        } catch (err) {
+          setLoading(false);
+          setPlaying(false);
+          setError((err as Error).message || 'playback failed');
+        }
+        return;
       }
 
-      // پخش قبلی را قطع کن تا دو کلیپ روی هم نیفتند
-      audioRef.current?.pause();
+      try {
+        const res = await fetch(`${API_BASE}${SPEAK_PATH}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: trimmed, language }),
+        });
 
-      const audio = new Audio(absoluteMediaUrl(url));
-      audioRef.current = audio;
-      audio.onended = () => setPlaying(false);
-      audio.onerror = () => {
+        const payload = (await res.json().catch(() => null)) as SpeakPayload | null;
+        const url = payload?.data?.url;
+        if (!res.ok || !payload?.ok || !url) {
+          throw new Error(payload?.error?.message || 'speech synthesis failed');
+        }
+
+        urlCache.current.set(cacheKey, url);
+        await startPlayback(url);
+      } catch (err) {
+        setLoading(false);
         setPlaying(false);
-        setError('playback failed');
-      };
-
-      await audio.play();
-      // پخش شروع شد → دیگر «بارگذاری» نیست
-      setLoading(false);
-      setPlaying(true);
-    } catch (err) {
-      setLoading(false);
-      setPlaying(false);
-      setError((err as Error).message);
-    }
-  }, []);
+        // ⚠️ خطا دیگر بی‌صدا نمی‌ماند؛ دکمه متن «پخش نشد» را نشان می‌دهد.
+        setError((err as Error).message || 'speech synthesis failed');
+      }
+    },
+    [startPlayback]
+  );
 
   const stop = useCallback(() => {
     audioRef.current?.pause();

@@ -84,7 +84,12 @@ export function useRetryCycle() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (): Promise<{ ok: boolean; via: string; alreadyGenerating?: boolean }> => {
+    mutationFn: async (): Promise<{
+      ok: boolean;
+      via: string;
+      alreadyGenerating?: boolean;
+      recovered?: string;
+    }> => {
       if (MOCK) {
         await new Promise((r) => setTimeout(r, 900));
         return { ok: true, via: 'inline' };

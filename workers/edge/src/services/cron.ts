@@ -70,9 +70,25 @@ export async function runBackgroundGeneration(
   let retried = 0;
 
   // ── الف) چرخه‌های نیمه‌کاره ───────────────────────────────────────
-  const stuck = await r.listGeneratingCyclesWithoutLessons(maxCycles);
+  //
+  // ⚠️ باگ رفع‌شده: قبلاً فقط چرخه‌های GENERATING **بدون ردیف درس** دیده
+  // می‌شدند. چرخه‌ای که ردیف درس داشت (روزها پر شده بودند) ولی ACTIVE نشده
+  // بود، هرگز توسط کرون ترمیم نمی‌شد و کاربر تا ابد اسپینر می‌دید.
+  // حالا چرخه‌های GENERATING قدیمی‌تر از ۱۰ دقیقه بررسی می‌شوند:
+  //   • روز ۱ محتوا دارد → فقط فعال‌سازی (صفر هزینهٔ AI)
+  //   • روز ۱ خالی است → تولید دوباره
+  const stuck = await r.listStaleGeneratingCycles(10 * 60_000, maxCycles);
   for (const c of stuck) {
     if (Date.now() - t0 > budgetMs) break;
+    const lessons = await r.getLessonsForCycle(c.id);
+    const day1 = lessons.find((l) => l.day_number === 1);
+    const day1Ready =
+      day1?.part_1_data && Object.keys(day1.part_1_data as object).length > 0;
+    if (day1Ready) {
+      await r.activateCycleWithFirstLesson(c.id);
+      cycles += 1;
+      continue;
+    }
     const res = await runCycleGeneration(env, c.user_id, c.cycle_number, { firstOnly: true });
     if (res.ok) cycles += 1;
     else failed += 1;

@@ -38,6 +38,12 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
           showToast(t('learn.retryAlreadyRunning'), 'info');
           return;
         }
+        // «recovered: activated» یعنی درس آماده بود ولی چرخه فعال نشده بود
+        // (باگ چرخهٔ گیرکرده). پیام دقیق‌تر کمک می‌کند کاربر بفهمد چه شد.
+        if (res.recovered === 'activated') {
+          showToast(t('learn.retryActivated'), 'success');
+          return;
+        }
         showToast(t('learn.retryStarted'), 'success');
       },
       onError: () => {

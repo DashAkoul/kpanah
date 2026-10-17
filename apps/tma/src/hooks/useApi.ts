@@ -103,6 +103,56 @@ export function useRetryCycle() {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// مرور آزاد (واژه‌های سررسیده)
+// ─────────────────────────────────────────────────────────────────────
+
+export interface DueReviewItem {
+  term: string;
+  meaning: string;
+  example: string;
+  exampleTranslation?: string;
+  pronunciation?: string;
+  box: number;
+}
+
+/**
+ * واژه‌هایی که زمان مرورشان رسیده.
+ *
+ * ⚠️ این حلقه قبلاً بسته نبود: اگر درس امروز به واژه‌ای نمی‌پرداخت،
+ * فاصلهٔ لایتنر آن عملاً بی‌اثر می‌شد.
+ */
+export function useDueReviews() {
+  const status = useSessionStore((s) => s.status);
+
+  return useQuery({
+    queryKey: ['due-reviews'],
+    enabled: status === 'authenticated',
+    queryFn: async (): Promise<{ items: DueReviewItem[]; count: number; totalDue: number }> => {
+      if (MOCK) return { items: [], count: 0, totalDue: 0 };
+      return api.dueReviews();
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useSubmitReview() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (body: {
+      answers: { term: string; isCorrect: boolean; responseMs: number }[];
+    }) => {
+      if (MOCK) return { ok: true, updated: body.answers.length };
+      return api.submitReview(body);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['due-reviews'] });
+      void queryClient.invalidateQueries({ queryKey: ['progress'] });
+    },
+  });
+}
+
 export function useHome() {
   const status = useSessionStore((s) => s.status);
 

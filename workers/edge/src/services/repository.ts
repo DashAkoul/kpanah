@@ -837,6 +837,32 @@ export class ContentRepository {
     return (rows as LexicalRow[]) ?? [];
   }
 
+  /**
+   * واژه‌هایی که زمان مرورشان رسیده (`next_review_at <= now`).
+   *
+   * ⚠️ این‌ها واژه‌هایی‌اند که در درس‌های قبلی دیده شده‌اند ولی درس امروز
+   * به آن‌ها نمی‌پردازد — «مرور آزاد» دقیقاً برای همین‌هاست.
+   */
+  async listDueLexicalItems(
+    userId: string,
+    targetLanguage: string,
+    limit = 60
+  ): Promise<LexicalRow[]> {
+    try {
+      const rows = await this.db.select<LexicalRow>('lexical_items', {
+        user_id: `eq.${userId}`,
+        target_language: `eq.${targetLanguage}`,
+        next_review_at: `lte.${new Date().toISOString()}`,
+        order: 'next_review_at.asc',
+        limit: String(limit),
+        select: '*',
+      });
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
   async upsertLexicalItem(
     userId: string,
     targetLanguage: string,

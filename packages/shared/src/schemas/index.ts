@@ -433,6 +433,25 @@ export const completeLessonSchema = z.object({
 
 export type CompleteLessonInput = z.infer<typeof completeLessonSchema>;
 
+/**
+ * ارسال نتیجهٔ «مرور آزاد» (واژه‌های سررسیده بین دو درس).
+ * برخلاف درس، به lessonId وابسته نیست.
+ */
+export const reviewSubmitSchema = z.object({
+  answers: z
+    .array(
+      z.object({
+        term: nonEmpty(120),
+        isCorrect: z.boolean(),
+        responseMs: z.number().int().min(0).max(600_000),
+      })
+    )
+    .min(1)
+    .max(60),
+});
+
+export type ReviewSubmitInput = z.infer<typeof reviewSubmitSchema>;
+
 export const telemetryBatchSchema = z.object({
   lessonId: z.string().uuid().optional(),
   events: z

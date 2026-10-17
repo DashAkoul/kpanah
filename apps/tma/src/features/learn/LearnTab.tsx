@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, Button, ProgressBar } from '../../components/ui';
 import { Roadmap } from './Roadmap';
 import { LessonCard } from './LessonCard';
-import { useHome, useRetryCycle } from '../../hooks/useApi';
+import { useHome, useRetryCycle, useDueReviews } from '../../hooks/useApi';
+import { ReviewSession } from './ReviewSession';
 import { useSessionStore } from '../../store/session';
 import { useUiStore } from '../../store/ui';
 
@@ -21,6 +23,8 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const { data, isLoading, isRefetching, error, refetch } = useHome();
   const user = useSessionStore((s) => s.user);
   const retry = useRetryCycle();
+  const due = useDueReviews();
+  const [reviewOpen, setReviewOpen] = useState(false);
   const showToast = useUiStore((s) => s.showToast);
 
   /**
@@ -140,8 +144,32 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   }
 
   // ── 4. Active lesson ──────────────────────────────────────────────
+  const dueItems = due.data?.items ?? [];
+
   return (
     <div className="space-y-4 p-4">
+      {/* مرور آزاد — واژه‌هایی که فاصلهٔ لایتنرشان سر رسیده */}
+      {dueItems.length > 0 && (
+        <Card className="border-brand-200 bg-brand-50/40">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-text">
+                🔁 {t('review.cardTitle', { count: dueItems.length })}
+              </p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-text-hint">
+                {t('review.cardBody')}
+              </p>
+            </div>
+            <Button size="sm" onClick={() => setReviewOpen(true)}>
+              {t('review.start')}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {reviewOpen && dueItems.length > 0 && (
+        <ReviewSession items={dueItems} onClose={() => setReviewOpen(false)} />
+      )}
       {/* Cycle header */}
       <div>
         <h1 className="text-lg font-bold leading-snug text-text">

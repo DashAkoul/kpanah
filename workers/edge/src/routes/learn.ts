@@ -3,6 +3,7 @@ import {
   onboardingRequestSchema,
   telemetryBatchSchema,
   updateProfileSchema,
+  reviewSubmitSchema,
   applyLeitnerReview,
   buildSkillDelta,
   computeStreak,
@@ -411,7 +412,17 @@ export async function handleCompleteLesson(
   }
 
   // ── 1. جعبه لایتنر ───────────────────────────────────────────────
-  const lexical = await r.getLexicalItems(user.id, user.target_language);
+  //
+  // ⚠️ هر یک از این مراحل **best-effort** است: ثبت آمار یا به‌روزرسانی
+  // لایتنر نباید هرگز جلوی «تکمیل درس» را بگیرد. قبلاً هر خطای دیتابیس در
+  // این بخش، کل درخواست را ۵۰۰ می‌کرد و کاربر فقط می‌دید دکمهٔ «انجام شد»
+  // هیچ کاری نمی‌کند (در DB هم صفر telemetry ثبت شده بود).
+  let lexical: Awaited<ReturnType<ContentRepository['getLexicalItems']>> = [];
+  try {
+    lexical = await r.getLexicalItems(user.id, user.target_language);
+  } catch (err) {
+    console.warn(`[complete] lexical read failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const boxByTerm = new Map(lexical.map((l) => [l.term, l]));
 
   const updates = new Map<string, Parameters<ContentRepository['upsertLexicalItem']>[2]>();
@@ -446,12 +457,16 @@ export async function handleCompleteLesson(
 
   await Promise.all(
     [...updates.values()].map((u) =>
-      r.upsertLexicalItem(user.id, user.target_language, u)
+      r.upsertLexicalItem(user.id, user.target_language, u).catch((err) => {
+        console.warn(
+          `[complete] leitner upsert failed for "${u.term}": ${err instanceof Error ? err.message : String(err)}`
+        );
+      })
     )
   );
 
   // ── 2. ثبت تلمتری ────────────────────────────────────────────────
-  await r.insertTelemetry([
+  const telemetryRows = [
     {
       user_id: user.id,
       lesson_id: lessonId,
@@ -476,7 +491,13 @@ export async function handleCompleteLesson(
       event_type: 'LESSON_END',
       payload: { day: lesson.day_number, durationSeconds },
     },
-  ]);
+  ];
+
+  try {
+    await r.insertTelemetry(telemetryRows);
+  } catch (err) {
+    console.warn(`[complete] telemetry insert failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // ── 3. تکمیل درس و آزادسازی بعدی ─────────────────────────────────
   await r.completeLesson(lessonId, { durationSeconds, status: 'COMPLETED' });
@@ -642,6 +663,172 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// GET  /gate?action=due-reviews   → واژه‌های سررسیده برای مرور آزاد
+// POST /gate?action=review-submit → ثبت نتیجهٔ مرور (لایتنر + تلمتری)
+// ═════════════════════════════════════════════════════════════════════
+
+/** حداکثر تعداد واژه در یک جلسهٔ مرور (بیشتر = خستگی) */
+const REVIEW_SESSION_MAX = 12;
+
+/**
+ * «مرور آزاد» — حلقه‌ای که قبلاً بسته نبود.
+ *
+ * واژه‌هایی که `next_review_at` آن‌ها گذشته ولی درس امروز به آن‌ها
+ * نمی‌پردازد، اینجا مستقل مرور می‌شوند. بدون این، فاصلهٔ لایتنر فقط
+ * به شانسِ ظاهر شدن واژه در درس بعدی وابسته بود.
+ */
+export async function handleDueReviews(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const due = await r.listDueLexicalItems(user.id, user.target_language, 60);
+  if (due.length === 0) {
+    return jsonSuccess({ items: [], count: 0, totalDue: 0 }, requestId, env);
+  }
+
+  const slice = due.slice(0, REVIEW_SESSION_MAX);
+  const cards = await r
+    .findTermCards(
+      user.target_language,
+      user.ui_language,
+      slice.map((d) => d.term)
+    )
+    .catch(() => ({}) as Record<string, TermCard>);
+
+  const items = slice
+    .map((d) => {
+      const card = cards[d.term.trim().toLowerCase()];
+      return {
+        term: d.term,
+        meaning: card?.meaning ?? '',
+        example: card?.example ?? '',
+        exampleTranslation: card?.exampleTranslation,
+        pronunciation: card?.pronunciation,
+        box: d.box,
+      };
+    })
+    // بدون معنی، سؤال «معنی کدام است؟» قابل ساخت نیست
+    .filter((i) => i.meaning.length > 0);
+
+  return jsonSuccess(
+    { items, count: items.length, totalDue: due.length },
+    requestId,
+    env
+  );
+}
+
+/**
+ * ثبت نتیجهٔ مرور آزاد.
+ *
+ * ⚠️ مثل `complete-lesson`، همهٔ عوارض جانبی best-effort هستند: خطای
+ * تلمتری نباید مرور را از کار بیندازد.
+ */
+export async function handleReviewSubmit(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const body = await readJson(request);
+  const parsed = reviewSubmitSchema.safeParse(body);
+  if (!parsed.success) {
+    return jsonError(
+      'VALIDATION_ERROR',
+      parsed.error.issues[0]?.message ?? 'Invalid review payload',
+      requestId,
+      env,
+      400
+    );
+  }
+
+  let lexical: Awaited<ReturnType<ContentRepository['getLexicalItems']>> = [];
+  try {
+    lexical = await r.getLexicalItems(user.id, user.target_language);
+  } catch (err) {
+    console.warn(`[review] lexical read failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const byTerm = new Map(lexical.map((l) => [l.term, l]));
+
+  const updates = new Map<string, Parameters<ContentRepository['upsertLexicalItem']>[2]>();
+  for (const answer of parsed.data.answers) {
+    const existing = byTerm.get(answer.term);
+    const review = applyLeitnerReview({
+      box: existing?.box ?? 1,
+      ease: existing?.ease ?? 2.5,
+      repetitions: existing?.repetitions ?? 0,
+      lapses: existing?.lapses ?? 0,
+      isCorrect: answer.isCorrect,
+      responseMs: answer.responseMs,
+    });
+
+    updates.set(answer.term, {
+      term: answer.term,
+      box: review.box,
+      ease: review.ease,
+      repetitions: review.repetitions,
+      lapses: review.lapses,
+      intervalDays: review.intervalDays,
+      mastered: review.mastered,
+      successCount: (existing?.success_count ?? 0) + (answer.isCorrect ? 1 : 0),
+      failCount: (existing?.fail_count ?? 0) + (answer.isCorrect ? 0 : 1),
+      nextReviewAt: nextReviewDate(review.intervalDays).toISOString(),
+    });
+  }
+
+  await Promise.all(
+    [...updates.values()].map((u) =>
+      r.upsertLexicalItem(user.id, user.target_language, u).catch((err) => {
+        console.warn(
+          `[review] upsert failed for "${u.term}": ${err instanceof Error ? err.message : String(err)}`
+        );
+      })
+    )
+  );
+
+  try {
+    await r.insertTelemetry([
+      ...parsed.data.answers.map((a) => ({
+        user_id: user.id,
+        lesson_id: null,
+        cycle_id: null,
+        event_type: 'ANSWER',
+        item_id: `review:${a.term}`.slice(0, 60),
+        is_correct: a.isCorrect,
+        response_ms: a.responseMs,
+        payload: { source: 'free-review' },
+      })),
+      {
+        user_id: user.id,
+        lesson_id: null,
+        cycle_id: null,
+        event_type: 'SESSION_END',
+        payload: { source: 'free-review', answered: parsed.data.answers.length },
+      },
+    ]);
+  } catch (err) {
+    console.warn(`[review] telemetry failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  return jsonSuccess(
+    { ok: true, updated: updates.size },
+    requestId,
+    env
+  );
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -959,7 +1146,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-const LESSON_CONTENT_VERSION = 3;
+const LESSON_CONTENT_VERSION = 4;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -1219,7 +1406,8 @@ function normalizeDrillChoices(lesson: GeneratedLesson): GeneratedLesson {
     const buildChoice = (
       correct: string,
       choice: { options: string[]; correctIndex: number } | undefined,
-      seed: string
+      seed: string,
+      requireTerm?: string
     ): { options: string[]; correctIndex: number } | undefined => {
       if (!choice) return undefined;
       const idx = choice.correctIndex;
@@ -1228,12 +1416,27 @@ function normalizeDrillChoices(lesson: GeneratedLesson): GeneratedLesson {
         .map((o) => o.trim());
       const unique = Array.from(new Set(wrong));
       if (unique.length < 2) return undefined; // گزینهٔ کافی نیست → UI ساده
+
+      // ⚠️ سؤال «کدام جمله واژه را درست به کار برده؟» فقط وقتی معنا دارد که
+      // **همهٔ** گزینه‌ها همان واژه را داشته باشند؛ وگرنه کاربر با شمارش
+      // کلمه جواب را پیدا می‌کند (باگ گزارش‌شده).
+      if (requireTerm) {
+        const needle = requireTerm.trim().toLowerCase();
+        const all = [correct, unique[0]!, unique[1]!];
+        if (!all.every((o) => o.toLowerCase().includes(needle))) return undefined;
+      }
+
       const shuffled = stableShuffle([correct, unique[0]!, unique[1]!], seed);
       return { options: shuffled, correctIndex: shuffled.indexOf(correct) };
     };
 
     const meaningOptions = buildChoice(item.meaning, item.meaningOptions, `${item.term}:m`);
-    const exampleOptions = buildChoice(item.example, item.exampleOptions, `${item.term}:e`);
+    const exampleOptions = buildChoice(
+      item.example,
+      item.exampleOptions,
+      `${item.term}:e`,
+      item.term
+    );
     if (meaningOptions) next.meaningOptions = meaningOptions;
     else delete next.meaningOptions;
     if (exampleOptions) next.exampleOptions = exampleOptions;

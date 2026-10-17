@@ -17,6 +17,8 @@ import {
   handleTelemetry,
   handleCompleteLesson,
   handleRetryCycle,
+  handleDueReviews,
+  handleReviewSubmit,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -403,6 +405,10 @@ async function dispatch(
       return handleCompleteLesson(request, context);
     case 'retry-cycle':
       return handleRetryCycle(request, context);
+    case 'due-reviews':
+      return handleDueReviews(request, context);
+    case 'review-submit':
+      return handleReviewSubmit(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

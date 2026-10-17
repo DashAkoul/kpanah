@@ -779,6 +779,10 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `  The two wrong ones must look similar (same length/register) so the answer is not`,
     `  guessable. NEVER put the lesson's "example" sentence — or a full sentence — in`,
     `  "slots"; slots are short complements (1-5 words). Set "correctIndex".`,
+    `  ⚠️ "base" MUST be a DIFFERENT sentence from "example": change the subject,`,
+    `  object or context (e.g. example "My phone number is 0912…" → base`,
+    `  "What is your ___ ?"). Filling the blank must NOT reproduce the example —`,
+    `  otherwise the drill teaches nothing because the learner just saw the answer.`,
   ].join('\n');
 }
 

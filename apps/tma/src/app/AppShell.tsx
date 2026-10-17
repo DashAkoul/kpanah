@@ -120,8 +120,10 @@ export function AppShell() {
         lesson={homeData.lesson}
         onExit={() => setScreen('tabs')}
         onFinish={(answers) => {
-          const durationSeconds = Math.round(
-            (Date.now() - lessonSession.startedAt) / 1000
+          // سقف ۲۴ ساعت — اسکیمای سرور بیشتر از این را رد می‌کند
+          const durationSeconds = Math.min(
+            86_400,
+            Math.max(0, Math.round((Date.now() - lessonSession.startedAt) / 1000))
           );
 
           completeLesson.mutate(

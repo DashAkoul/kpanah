@@ -91,7 +91,13 @@ export const useLessonSession = create<LessonSessionState>((set, get) => ({
 
   recordAnswer: (answer) => {
     const { itemStartedAt } = get();
-    const responseMs = Math.max(0, Date.now() - itemStartedAt);
+    // ⚠️ سقف ۱۰ دقیقه: اگر کاربر اپ را رها کند و برگردد، responseMs
+    // می‌تواند از max اسکیمای سرور (۶۰۰٬۰۰۰ms) بگذرد و کل درخواست
+    // complete-lesson را با ۴۰۰ رد کند → «دکمه انجام شد کار نمی‌کند».
+    const responseMs = Math.min(
+      600_000,
+      Math.max(0, Date.now() - itemStartedAt)
+    );
     const full: PendingAnswer = { ...answer, responseMs };
     set((state) => ({
       pendingAnswers: [...state.pendingAnswers, full],

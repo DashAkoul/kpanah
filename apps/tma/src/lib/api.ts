@@ -445,6 +445,26 @@ export const api = {
   telemetry: (body: unknown) =>
     callApi<{ accepted: number }>('telemetry', { method: 'POST', body }),
 
+  /** واژه‌های سررسیده برای «مرور آزاد» (بین دو درس) */
+  dueReviews: () =>
+    callApi<{
+      items: {
+        term: string;
+        meaning: string;
+        example: string;
+        exampleTranslation?: string;
+        pronunciation?: string;
+        box: number;
+      }[];
+      count: number;
+      totalDue: number;
+    }>('due-reviews'),
+
+  /** ثبت نتیجهٔ مرور آزاد — لایتنر و آمار را به‌روز می‌کند */
+  submitReview: (body: {
+    answers: { term: string; isCorrect: boolean; responseMs: number }[];
+  }) => callApi<{ ok: boolean; updated: number }>('review-submit', { method: 'POST', body }),
+
   onboarding: (body: unknown) =>
     callApi<unknown>('onboarding', { method: 'POST', body }),
 

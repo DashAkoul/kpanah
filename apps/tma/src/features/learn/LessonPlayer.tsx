@@ -267,7 +267,11 @@ export function LessonPlayer({
         {part === 1 && currentItem && (
           <Part1Actions
             step={p1Step}
-            hasChoice={Boolean(currentChoice)}
+            hasChoice={Boolean(
+              currentItem.meaningOptions ||
+                currentItem.exampleOptions ||
+                currentItem.substitution?.correctIndex !== undefined
+            )}
             checked={p1Checked}
             canCheck={p1Selected !== null}
             onCheck={checkP1}
@@ -492,6 +496,7 @@ function PatternItemView({
             checked={checked}
             onSelect={onSelect}
             ltr={step !== 'meaning'}
+            allowDontKnow
           />
 
           {checked && (
@@ -515,6 +520,9 @@ function PatternItemView({
               >
                 {choice.options[choice.correctIndex]}
               </p>
+              {selected === -1 && (
+                <p className="mt-1 text-[11px] text-text-hint">{t('lesson.dontKnowHint')}</p>
+              )}
             </div>
           )}
         </Card>
@@ -540,6 +548,7 @@ function ChoiceList({
   checked,
   onSelect,
   ltr,
+  allowDontKnow,
 }: {
   options: string[];
   correctIndex: number;
@@ -547,7 +556,11 @@ function ChoiceList({
   checked: boolean;
   onSelect: (index: number) => void;
   ltr: boolean;
+  /** گزینهٔ «نمی‌دانم» — همیشه غلط حساب می‌شود ولی کاربر را گیر نمی‌اندازد */
+  allowDontKnow?: boolean;
 }) {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-2">
       {options.map((option, index) => {
@@ -596,6 +609,22 @@ function ChoiceList({
           </button>
         );
       })}
+
+      {allowDontKnow && (
+        <button
+          type="button"
+          onClick={() => onSelect(-1)}
+          disabled={checked}
+          className={clsx(
+            'w-full rounded-xl border border-dashed p-2.5 text-center text-xs font-medium transition active:scale-[0.99]',
+            !checked && selected === -1
+              ? 'border-brand-500 bg-brand-50 text-brand-700'
+              : 'border-border bg-transparent text-text-muted'
+          )}
+        >
+          🤷 {t('lesson.dontKnow')}
+        </button>
+      )}
     </div>
   );
 }
@@ -671,6 +700,7 @@ function ApplicationView({
         checked={revealed}
         onSelect={onSelect}
         ltr
+        allowDontKnow
       />
 
       {revealed && (

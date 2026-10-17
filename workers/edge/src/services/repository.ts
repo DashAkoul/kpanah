@@ -463,14 +463,23 @@ export class ContentRepository {
   > {
     const cutoff = new Date(Date.now() - minAgeMs).toISOString();
     try {
+      // ⚠️ باگ رفع‌شده: این کوئری قبلاً `updated_at` را انتخاب می‌کرد اما
+      // جدول `cycles` چنین ستونی **ندارد** (ستون‌ها: created_at, started_at,
+      // completed_at). نتیجه: هر بار خطای 400 می‌داد، catch آن را می‌بلعید و
+      // فهرست خالی برمی‌گشت — یعنی **هیچ چرخهٔ FAILED هیچ‌وقت retry نمی‌شد**
+      // و کاربر برای همیشه در صفحهٔ خطا می‌ماند.
+      // حالا از `created_at` استفاده می‌کنیم (تنها مبنای زمانی موجود).
       const rows = await this.db.select<CycleRow>('cycles', {
         status: 'eq.FAILED',
-        order: 'updated_at.asc',
-        limit: String(limit),
-        select: 'id,user_id,cycle_number,focus_summary,updated_at',
+        order: 'created_at.asc',
+        limit: String(limit * 4),
+        select: 'id,user_id,cycle_number,focus_summary,created_at,completed_at',
       });
+      // ⚠️ `completed_at` در چرخهٔ FAILED = زمان شکست (`markCycleFailed`).
+      // اگر موجود نبود، `created_at` مبنا می‌شود. این باعث می‌شود فاصلهٔ
+      // ۳۰ دقیقه‌ای بین تلاش‌ها رعایت شود و سهمیهٔ AI هر ۵ دقیقه نسوزد.
       return (rows as unknown as Record<string, unknown>[])
-        .filter((c) => String(c.updated_at ?? '') < cutoff)
+        .filter((c) => String(c.completed_at ?? c.created_at ?? '') < cutoff)
         .slice(0, limit) as never;
     } catch {
       return [];
@@ -591,6 +600,63 @@ export class ContentRepository {
   /** چرخه را فعال کن (بعد از آماده شدن روز ۱) */
   async activateCycle(cycleId: string): Promise<void> {
     await this.db.update('cycles', { id: cycleId }, { status: 'ACTIVE' });
+  }
+
+  /**
+   * فعال‌سازی «ترمیمی» چرخه‌ای که محتوای روز ۱ را دارد ولی در وضعیت
+   * GENERATING گیر کرده.
+   *
+   * ⚠️ چرا لازم است: اگر تولید روز ۱ یک‌بار شکست بخورد و بعد کرون روزها را
+   * (با `generateLessonJob` که وضعیت `LOCKED` می‌گذارد) پر کند، چرخه هیچ‌وقت
+   * ACTIVE نمی‌شود. `retry-cycle` هم چون وضعیت GENERATING است می‌گوید
+   * «همین حالا در جریان است» → کاربر تا ابد اسپینر می‌بیند.
+   * این متد هم چرخه را ACTIVE می‌کند و هم روز ۱ را AVAILABLE.
+   */
+  async activateCycleWithFirstLesson(cycleId: string): Promise<void> {
+    await this.db.update('cycles', { id: cycleId }, {
+      status: 'ACTIVE',
+      started_at: new Date().toISOString(),
+    });
+    await this.db.update(
+      'lessons',
+      { cycle_id: `eq.${cycleId}`, day_number: 'eq.1' },
+      { status: 'AVAILABLE' }
+    );
+  }
+
+  /**
+   * چرخه‌های GENERATING که بیش از `minAgeMs` در این وضعیت مانده‌اند.
+   *
+   * ⚠️ `listGeneratingCyclesWithoutLessons` فقط چرخه‌های **بدون ردیف درس**
+   * را برمی‌گرداند. چرخه‌ای که ردیف درس دارد (ولی محتوایش ناقص یا فعال‌نشده
+   * است) هرگز دیده نمی‌شد و برای همیشه گیر می‌کرد.
+   */
+  async listStaleGeneratingCycles(
+    minAgeMs: number,
+    limit = 3
+  ): Promise<{ id: string; user_id: string; cycle_number: number }[]> {
+    const cutoff = new Date(Date.now() - minAgeMs).toISOString();
+    try {
+      const rows = await this.db.select<CycleRow>('cycles', {
+        status: 'eq.GENERATING',
+        order: 'created_at.asc',
+        limit: String(limit * 4),
+        select: 'id,user_id,cycle_number,created_at,started_at',
+      });
+      return (rows as unknown as Record<string, unknown>[])
+        .filter((c) => {
+          const ts = String(c.started_at ?? c.created_at ?? '');
+          return ts !== '' && ts < cutoff;
+        })
+        .slice(0, limit)
+        .map((c) => ({
+          id: String(c.id),
+          user_id: String(c.user_id),
+          cycle_number: Number(c.cycle_number),
+        }));
+    } catch {
+      return [];
+    }
   }
 
   /** چرخه را FAILED کن (وقتی هیچ روزی تولید نشد) */

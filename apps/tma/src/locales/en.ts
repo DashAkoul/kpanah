@@ -72,6 +72,7 @@ export default {
       generating: 'Preparing your next cycle…',
       generatingHint: 'The AI is building lessons from your performance.',
       generationFailed: 'Lesson generation failed',
+      retryActivated: 'Your lesson is ready ✅',
       retryStarted: 'Regeneration started…',
       retryAlreadyRunning: 'Generation is already running',
       retryFailed: 'Could not restart — please try again',

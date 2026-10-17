@@ -72,6 +72,7 @@ export default {
       generating: 'چرخه بعدی در حال آماده‌سازی است…',
       generatingHint: 'چند لحظه صبر کن — هوش مصنوعی دارد بر اساس عملکرد تو درس می‌سازد.',
       generationFailed: 'ساخت درس ناموفق بود',
+      retryActivated: 'درس آماده شد ✅',
       retryStarted: 'تولید دوباره شروع شد…',
       retryAlreadyRunning: 'تولید همین حالا در جریان است',
       retryFailed: 'شروع دوباره نشد — دوباره تلاش کن',

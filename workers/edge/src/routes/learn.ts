@@ -107,8 +107,33 @@ export async function handleHome(
   });
 
   // چرخه فعال یا چرخه در حال تولید
-  const activeCycle = await r.getActiveCycle(user.id);
-  const generatingCycle = activeCycle ? null : await r.getGeneratingCycle(user.id);
+  let activeCycle = await r.getActiveCycle(user.id);
+  let generatingCycle = activeCycle ? null : await r.getGeneratingCycle(user.id);
+
+  // ── خودترمیمی چرخهٔ گیرکرده ────────────────────────────────────────
+  //
+  // ⚠️ باگ رفع‌شده: اگر تولید روز ۱ یک‌بار شکست بخورد و بعد کرون/صف روزها
+  // را پر کند، چرخه در وضعیت GENERATING می‌ماند ولی محتوای روز ۱ موجود است.
+  // در این حالت `generating` تا ابد true بود و کاربر فقط اسپینر می‌دید.
+  // حالا اگر روز ۱ محتوا دارد، همین‌جا چرخه را ACTIVE می‌کنیم.
+  if (!activeCycle && generatingCycle && generatingCycle.status === 'GENERATING') {
+    try {
+      const genLessons = await r.getLessonsForCycle(generatingCycle.id);
+      const day1 = genLessons.find((l) => l.day_number === 1);
+      const day1Ready =
+        day1?.part_1_data && Object.keys(day1.part_1_data as object).length > 0;
+      if (day1Ready) {
+        await r.activateCycleWithFirstLesson(generatingCycle.id);
+        activeCycle = { ...generatingCycle, status: 'ACTIVE' };
+        generatingCycle = null;
+        console.log(`[home] activated stuck cycle ${activeCycle.id}`);
+      }
+    } catch (err) {
+      console.warn(
+        `[home] self-heal failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
 
   if (!activeCycle) {
     // ⚠️ چرا `generating` فقط برای GENERATING است: قبلاً هر چرخهٔ
@@ -570,6 +595,30 @@ export async function handleRetryCycle(
 
   // اگر چرخه سالم است، دوباره تولید نکن (idempotent + محافظ هزینهٔ AI)
   if (cycle.status === 'GENERATING') {
+    // ⚠️ باگ رفع‌شده: قبلاً هر چرخهٔ GENERATING «در جریان» تلقی می‌شد و
+    // دکمهٔ تلاش مجدد فقط toast «همین حالا در جریان است» می‌داد — حتی وقتی
+    // تولید ساعاتی پیش مرده بود و هیچ‌وقت تمام نمی‌شد. حالا دو حالت:
+    //   ۱. روز ۱ محتوا دارد → چرخه فقط فعال نشده؛ فعالش کن (بدون AI)
+    //   ۲. خیلی وقت است GENERATING مانده → از نو تولید کن
+    const lessons = await r.getLessonsForCycle(cycle.id);
+    const day1 = lessons.find((l) => l.day_number === 1);
+    const day1Ready =
+      day1?.part_1_data && Object.keys(day1.part_1_data as object).length > 0;
+
+    if (day1Ready) {
+      await r.activateCycleWithFirstLesson(cycle.id);
+      return jsonSuccess({ ok: true, via: 'none', recovered: 'activated' }, requestId, env);
+    }
+
+    const startedAt = cycle.started_at ?? cycle.created_at;
+    const ageMs = startedAt ? Date.now() - new Date(startedAt).getTime() : Infinity;
+    // آستانه: ۳ دقیقه. تولید عادی روز ۱ معمولاً زیر ۱ دقیقه است.
+    if (ageMs > 3 * 60_000) {
+      await r.resetCycleForRetry(cycle.id);
+      const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
+      return jsonSuccess({ ok: true, via: via.via, recovered: 'regenerated' }, requestId, env);
+    }
+
     return jsonSuccess(
       { ok: true, via: 'none', alreadyGenerating: true },
       requestId,
@@ -1415,7 +1464,29 @@ export async function runLessonGeneration(
 
   const variant = ((cycleNumber - 1) % 3) + 1;
   const ok = await generateLessonJob(env, r, engine, input, outline, cycleId, day, variant);
-  return ok ? { ok: true } : { ok: false, error: `day ${dayNumber} generation failed` };
+  if (!ok) return { ok: false, error: `day ${dayNumber} generation failed` };
+
+  // ⚠️ اگر چرخه هنوز GENERATING است ولی روز ۱ حالا محتوا دارد، فعالش کن.
+  // این «ترمیم» جلوگیری می‌کند از حالتی که همهٔ روزها پر شده‌اند ولی چرخه
+  // هرگز ACTIVE نشده و کاربر برای همیشه اسپینر می‌بیند.
+  try {
+    const fresh = await r.getCycleById(cycleId);
+    if (fresh?.status === 'GENERATING') {
+      const all = await r.getLessonsForCycle(cycleId);
+      const d1 = all.find((l) => l.day_number === 1);
+      const d1Ready = d1?.part_1_data && Object.keys(d1.part_1_data as object).length > 0;
+      if (d1Ready) {
+        await r.activateCycleWithFirstLesson(cycleId);
+        console.log(`[gen] activated cycle ${cycleId} after filling day ${dayNumber}`);
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[gen] activation check failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  return { ok: true };
 }
 
 async function markCycleFailed(  r: ContentRepository,
@@ -1425,6 +1496,8 @@ async function markCycleFailed(  r: ContentRepository,
   await r['db'].update('cycles', { id: cycleId }, {
     status: 'FAILED',
     focus_summary: `Generation failed: ${reason.slice(0, 400)}`,
+    // زمان شکست — مبنای فاصله‌گذاری retry کرون (۳۰ دقیقه)
+    completed_at: new Date().toISOString(),
   });
 }
 

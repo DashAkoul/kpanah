@@ -100,12 +100,38 @@ export function normalizeCycleTitles<T extends { titleUi?: string; titleFa?: str
 // Lesson parts
 // ─────────────────────────────────────────────────────────────────────
 
-export const substitutionSchema = z.object({
-  base: nonEmpty(300),
-  // ⚠️ یافتهٔ ۸ بازبینی: قبلاً min(2) بود و الگویی با یک خانه (مثل
-  // «I want ___») مدل را می‌شکست. حداقل ۱ اسلات معتبر است.
-  slots: z.array(nonEmpty(80)).min(1).max(8),
-});
+/**
+ * گزینه‌های یک سؤال چندگزینه‌ای در بخش ۱ (معنی یا مثال).
+ *
+ * ⚠️ چرا لازم شد: کاربر باید قبل از دیدن معنی/مثال، آن را از بین گزینه‌ها
+ * انتخاب کند تا سیستم بتواند عملکردش را **ردیابی** کند. بدون گزینه،
+ * «بررسی پاسخ» هیچ چیزی را بررسی نمی‌کرد.
+ */
+export const drillChoiceSchema = z
+  .object({
+    options: z.array(nonEmpty(400)).min(2).max(4),
+    correctIndex: z.number().int().min(0).max(3),
+  })
+  .refine((c) => c.correctIndex < c.options.length, {
+    message: 'correctIndex out of range',
+  });
+
+export const substitutionSchema = z
+  .object({
+    base: nonEmpty(300),
+    // ⚠️ یافتهٔ ۸ بازبینی: قبلاً min(2) بود و الگویی با یک خانه (مثل
+    // «I want ___») مدل را می‌شکست. حداقل ۱ اسلات معتبر است.
+    slots: z.array(nonEmpty(80)).min(1).max(8),
+    /**
+     * ایندکس اسلات درست. ⚠️ فقط **یکی** از اسلات‌ها باید جمله را درست کامل
+     * کند؛ بقیه باید شبیه ولی نادرست باشند تا انتخاب کاربر قابل ردیابی باشد.
+     * اختیاری است تا محتوای قدیمی (بدون این فیلد) هم معتبر بماند.
+     */
+    correctIndex: z.number().int().min(0).max(7).optional(),
+  })
+  .refine((s) => s.correctIndex === undefined || s.correctIndex < s.slots.length, {
+    message: 'substitution.correctIndex out of range',
+  });
 
 export const patternDrillItemSchema = z.object({
   term: nonEmpty(120),
@@ -121,6 +147,10 @@ export const patternDrillItemSchema = z.object({
    */
   speakText: z.string().max(400).optional(),
   substitution: substitutionSchema.optional(),
+  /** گزینه‌های معنی — کاربر اول معنی را انتخاب می‌کند، بعد آشکار می‌شود */
+  meaningOptions: drillChoiceSchema.optional(),
+  /** گزینه‌های مثال — کاربر مثال درست را انتخاب می‌کند */
+  exampleOptions: drillChoiceSchema.optional(),
   /**
    * box به‌صورت literal union تعریف می‌شود تا خروجی infer شده با
    * LeitnerBox در types مطابق باشد. مدل این مقدار را تعیین نمی‌کند،

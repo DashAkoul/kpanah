@@ -145,10 +145,16 @@ export interface PatternDrillItem {
    * نسخهٔ «خواندنی» است تا TTS ورودی تمیز بگیرد.
    */
   speakText?: string;
+  /** گزینه‌های معنی (۱ درست + ۲ انحرافی) */
+  meaningOptions?: { options: string[]; correctIndex: number };
+  /** گزینه‌های مثال (۱ درست + ۲ انحرافی) */
+  exampleOptions?: { options: string[]; correctIndex: number };
   /** الگوی جایگزینی: جمله پایه + اسلات‌های قابل تعویض */
   substitution?: {
     base: string;
     slots: string[];
+    /** ایندکس اسلات درست — فقط یکی جمله را کامل می‌کند */
+    correctIndex?: number;
   };
   /** خانه لایتنر فعلی این واژه برای کاربر (۱ تا ۵) */
   box?: LeitnerBox;

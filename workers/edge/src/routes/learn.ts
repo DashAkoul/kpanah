@@ -194,8 +194,7 @@ export async function handleHome(
   // نرسیده باشد (`{}`). در آن حالت درس آماده نیست → وضعیت «در حال تولید»
   // نشان داده می‌شود تا UI درس خالی/خراب رندر نکند.
   let current = lessons.find((l) => !l.is_completed);
-  let currentReady =
-    current && current.part_1_data && Object.keys(current.part_1_data as object).length > 0;
+  let currentReady = current && lessonContentReady(current.part_1_data);
 
   // اگر محتوای روز جاری هنوز ساخته نشده (تولید ماژولار)، همین حالا و در همین
   // درخواست بسازش. این «تولید تنبل» تضمین می‌کند کاربر هیچ‌وقت درس خالی نبیند
@@ -219,8 +218,7 @@ export async function handleHome(
       const fresh = refreshed.find((l) => l.id === current!.id);
       if (fresh) {
         current = fresh;
-        currentReady =
-          fresh.part_1_data && Object.keys(fresh.part_1_data as object).length > 0;
+        currentReady = lessonContentReady(fresh.part_1_data);
       }
     }
   }
@@ -393,9 +391,20 @@ export async function handleCompleteLesson(
     return jsonError('NOT_FOUND', 'Lesson not found', requestId, env, 404);
   }
   if (lesson.is_completed) {
-    // idempotent — کلاینت ممکن است دوباره بفرستد
+    // idempotent — کلاینت ممکن است دوباره بفرستد.
+    // ⚠️ شکل پاسخ باید کامل باشد وگرنه صفحهٔ نتیجه با فیلدهای خالی می‌شکند
+    // (قبلاً فقط alreadyCompleted/dayNumber برمی‌گشت).
     return jsonSuccess(
-      { alreadyCompleted: true, dayNumber: lesson.day_number },
+      {
+        alreadyCompleted: true,
+        dayNumber: lesson.day_number,
+        score: { score: 0, accuracy: 0, speedBonus: 0, isPerfect: false },
+        reward: 0,
+        streak: user.streak_count,
+        cycleCompleted: false,
+        nextCycleTriggered: false,
+        appLocked: false,
+      },
       requestId,
       env
     );
@@ -950,7 +959,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-const LESSON_CONTENT_VERSION = 2;
+const LESSON_CONTENT_VERSION = 3;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -1022,7 +1031,7 @@ async function runModularGeneration(
     return { ok: false, error: 'day-1 generation failed' };
   }
 
-  await r.fillLessonContent(cycleId, 1, lesson1, 'AVAILABLE');
+  await r.fillLessonContent(cycleId, 1, stampContentVersion(lesson1), 'AVAILABLE');
   await r.activateCycle(cycleId);
 
   // ── ۳. بقیه در پس‌زمینه ──────────────────────────────────────────
@@ -1150,6 +1159,100 @@ function weaknessFingerprint(input: CycleGenerationInput, enabled: boolean): str
  * **صفر توکن اضافه**. کارتِ موجود مرجع است؛ کارتِ تازه ذخیره می‌شود تا
  * درس‌های بعدی همان را بگیرند («نخستین نوشته برنده است»).
  */
+/** نسخهٔ محتوا را داخل part1 می‌چسباند تا محتوای قدیمی قابل تشخیص باشد */
+function stampContentVersion(lesson: GeneratedLesson): GeneratedLesson {
+  return {
+    ...lesson,
+    part1: {
+      ...lesson.part1,
+      _cv: LESSON_CONTENT_VERSION,
+    } as GeneratedLesson['part1'],
+  };
+}
+
+/** آیا محتوای این ردیف درس با نسخهٔ فعلی هم‌خوان است؟ */
+function lessonContentReady(part1: unknown): boolean {
+  if (!part1 || typeof part1 !== 'object') return false;
+  const obj = part1 as Record<string, unknown>;
+  return Object.keys(obj).length > 0 && obj._cv === LESSON_CONTENT_VERSION;
+}
+
+/**
+ * هش ساده (FNV-1a) — برای شافل قطعی.
+ * ⚠️ چرا قطعی: گزینه‌ها در کش و در رندر بعدی باید همان ترتیب باشند، وگرنه
+ * correctIndex ذخیره‌شده با گزینه‌های جدید نمی‌خواند.
+ */
+function hashString(input: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function stableShuffle<T>(arr: T[], seed: string): T[] {
+  const out = [...arr];
+  let h = hashString(seed) || 1;
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    h = (Math.imul(h, 1664525) + 1013904223) >>> 0;
+    const j = h % (i + 1);
+    const tmp = out[i]!;
+    out[i] = out[j]!;
+    out[j] = tmp;
+  }
+  return out;
+}
+
+/**
+ * نرمال‌سازی گزینه‌های بخش ۱.
+ *
+ * ⚠️ چرا در سرور: مدل ممکن است گزینهٔ «درست» را با فیلد `meaning`/`example`
+ * یکی نکند (مثلاً بازنویسی کند) → کاربر جواب درست را می‌زند ولی سیستم
+ * غلط می‌شمارد. اینجا گزینهٔ درست **همیشه** با مقدار نهایی معنی/مثال
+ * جایگزین و دوباره شافل می‌شود تا ایندکس همیشه معتبر باشد.
+ */
+function normalizeDrillChoices(lesson: GeneratedLesson): GeneratedLesson {
+  const items = (lesson.part1?.items ?? []).map((item) => {
+    const next: typeof item = { ...item, speakText: item.term };
+
+    const buildChoice = (
+      correct: string,
+      choice: { options: string[]; correctIndex: number } | undefined,
+      seed: string
+    ): { options: string[]; correctIndex: number } | undefined => {
+      if (!choice) return undefined;
+      const idx = choice.correctIndex;
+      const wrong = choice.options
+        .filter((o, i) => i !== idx && o.trim() && o.trim() !== correct.trim())
+        .map((o) => o.trim());
+      const unique = Array.from(new Set(wrong));
+      if (unique.length < 2) return undefined; // گزینهٔ کافی نیست → UI ساده
+      const shuffled = stableShuffle([correct, unique[0]!, unique[1]!], seed);
+      return { options: shuffled, correctIndex: shuffled.indexOf(correct) };
+    };
+
+    const meaningOptions = buildChoice(item.meaning, item.meaningOptions, `${item.term}:m`);
+    const exampleOptions = buildChoice(item.example, item.exampleOptions, `${item.term}:e`);
+    if (meaningOptions) next.meaningOptions = meaningOptions;
+    else delete next.meaningOptions;
+    if (exampleOptions) next.exampleOptions = exampleOptions;
+    else delete next.exampleOptions;
+
+    if (next.substitution) {
+      const slots = next.substitution.slots;
+      const ci = next.substitution.correctIndex;
+      if (ci === undefined || ci < 0 || ci >= slots.length) {
+        next.substitution = { ...next.substitution, correctIndex: 0 };
+      }
+    }
+
+    return next;
+  });
+
+  return { ...lesson, part1: { ...lesson.part1, items } };
+}
+
 async function alignTermCards(
   r: ContentRepository,
   input: CycleGenerationInput,
@@ -1195,7 +1298,8 @@ async function alignTermCards(
     .bumpTermCardUse(language, uiLanguage, alignedItems.map((i) => i.term))
     .catch(() => undefined);
 
-  return { ...lesson, part1: { ...lesson.part1, items: alignedItems } };
+  // بعد از هم‌ترازی، گزینه‌ها را با مقادیر نهایی هم‌سو کن
+  return normalizeDrillChoices({ ...lesson, part1: { ...lesson.part1, items: alignedItems } });
 }
 
 /**
@@ -1262,33 +1366,58 @@ async function hydrateSkeleton(
     skeleton.part1.items.map((item) => item.term)
   );
 
+  const allCards = Object.values(cards);
+
   const items: PatternDrillItem[] = [];
   for (const item of skeleton.part1.items) {
     const card = cards[item.term.trim().toLowerCase()];
     if (!card?.meaning || !card.example) return null; // → fallback
+    // گزینه‌های انحرافی از **واژه‌های دیگر همین درس** ساخته می‌شوند:
+    // صفر توکن اضافه، و از نظر آموزشی نزدیک‌ترین گزینه‌های ممکن.
+    const others = allCards.filter(
+      (c) => c.term.trim().toLowerCase() !== item.term.trim().toLowerCase()
+    );
+    const otherMeanings = others.map((c) => c.meaning).filter(Boolean).slice(0, 2);
+    const otherExamples = others
+      .map((c) => c.example)
+      .filter((e): e is string => Boolean(e))
+      .slice(0, 2);
     items.push({
       term: item.term,
       meaning: card.meaning,
       pronunciation: card.pronunciation,
       example: card.example,
       exampleTranslation: card.exampleTranslation,
-      // کارت فیلد speakText ندارد؛ مثال خام کافی است چون `cleanForSpeech`
-      // خودش نشانه‌های نوشتاری را پاک می‌کند.
-      speakText: card.example,
+      // ⚠️ دکمهٔ «گوش کن» باید خودِ واژه را بخواند، نه مثال را
+      speakText: item.term,
       substitution: item.substitution,
+      meaningOptions:
+        otherMeanings.length >= 2
+          ? {
+              options: [card.meaning, otherMeanings[0]!, otherMeanings[1]!],
+              correctIndex: 0,
+            }
+          : undefined,
+      exampleOptions:
+        otherExamples.length >= 2
+          ? {
+              options: [card.example, otherExamples[0]!, otherExamples[1]!],
+              correctIndex: 0,
+            }
+          : undefined,
     });
   }
 
   if (items.length === 0) return null;
 
-  return {
+  return normalizeDrillChoices({
     dayNumber: skeleton.dayNumber,
     title: skeleton.title,
     titleUi: skeleton.titleUi,
     kind: skeleton.kind,
     part1: { type: 'PATTERN_DRILL', items },
     part2: skeleton.part2,
-  };
+  });
 }
 
 /** تولید (یا خواندن از کش) محتوای یک روز */
@@ -1389,7 +1518,7 @@ async function generateLessonJob(
   });
   if (!lesson) return false;
   // روزهای بعدی LOCKED می‌مانند؛ منطق باز شدن روزها جداست
-  await r.fillLessonContent(cycleId, day.dayNumber, lesson, 'LOCKED');
+  await r.fillLessonContent(cycleId, day.dayNumber, stampContentVersion(lesson), 'LOCKED');
   void env;
   return true;
 }
@@ -1419,9 +1548,9 @@ export async function runLessonGeneration(
   // اگر همین حالا پر شده، دوباره تولید نکن (idempotent)
   const target = lessons.find((l) => l.day_number === dayNumber);
   if (!target) return { ok: false, error: 'day not found in cycle' };
-  const hasContent =
-    target.part_1_data && Object.keys(target.part_1_data as object).length > 0;
-  if (hasContent) return { ok: true };
+  // ⚠️ فقط محتوای هم‌نسخه «آماده» حساب می‌شود؛ محتوای قدیمی بازتولید می‌شود
+  // تا کاربر بعد از تغییر اسکیما (گزینه‌های معنی/مثال) محتوای کهنه نبیند.
+  if (lessonContentReady(target.part_1_data)) return { ok: true };
 
   // ⚠️ ستون DB هنوز `title_fa` naam دارد ولی معنایش «زبان رابط کاربر»
   // است (یافتهٔ ۶ بازبینی). اینجا به `titleUi` نگاشت می‌شود تا با نام

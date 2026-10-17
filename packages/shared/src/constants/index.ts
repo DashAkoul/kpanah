@@ -417,7 +417,13 @@ export function languageFromTelegramCode(code: string | undefined): SupportedUiL
 // ─────────────────────────────────────────────────────────────────────
 
 export const SECURITY = {
-  jwtTtlSeconds: 15 * 60,
+  /**
+   * ⚠️ ۱۵ دقیقه برای یک درس کافی نبود: کاربر مبتدی ممکن است ۲۰+ دقیقه در
+   * درس بماند؛ توکن وسط درس منقضی می‌شد و `complete-lesson` با 401
+   * **بی‌صدا** شکست می‌خورد (دکمهٔ «انجام شد» هیچ کاری نمی‌کرد).
+   * ۲ ساعت امن است و کلاینت هم روی 401 یک‌بار re-auth می‌کند.
+   */
+  jwtTtlSeconds: 2 * 60 * 60,
   initDataMaxAgeSeconds: 24 * 60 * 60,
   rateLimitPerMinute: 60,
   rateLimitPerDay: 2000,

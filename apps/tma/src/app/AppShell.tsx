@@ -10,6 +10,8 @@ import { Button, Toast } from '../components/ui';
 import { MessageBanner } from '../components/MessageBanner';
 import { useHome, useCompleteLesson } from '../hooks/useApi';
 import { useSessionStore } from '../store/session';
+import { useUiStore } from '../store/ui';
+import { ApiClientError } from '../lib/api';
 import { useLessonSession } from '../store/session';
 import { setBackButton } from '../lib/telegram';
 
@@ -37,6 +39,7 @@ type Screen = 'tabs' | 'lesson' | 'result';
  */
 export function AppShell() {
   const { t } = useTranslation();
+  const showToast = useUiStore((s) => s.showToast);
   const status = useSessionStore((s) => s.status);
   const user = useSessionStore((s) => s.user);
   const authError = useSessionStore((s) => s.error);
@@ -131,6 +134,17 @@ export function AppShell() {
               onSuccess: (data) => {
                 setResult(data as ResultData);
                 setScreen('result');
+              },
+              // ⚠️ بدون این، هر خطای شبکه/اعتبارسنجی «هیچ اتفاقی» به‌نظر
+              // می‌رسید. حالا کاربر پیام می‌بیند و می‌تواند دوباره بزند.
+              onError: (err) => {
+                const message =
+                  err instanceof ApiClientError
+                    ? err.userMessageKey
+                      ? t(err.userMessageKey)
+                      : err.message
+                    : t('errors.server_error');
+                showToast(message, 'error');
               },
             }
           );

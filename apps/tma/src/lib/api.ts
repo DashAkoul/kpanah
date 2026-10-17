@@ -166,7 +166,37 @@ interface CallOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * فراخوانی دروازه + **re-auth بی‌صدا** روی 401.
+ *
+ * ⚠️ باگ رفع‌شده: TTL توکن ۱۵ دقیقه بود. کاربر مبتدی بیش از این در یک درس
+ * می‌ماند → توکن منقضی می‌شد → `complete-lesson` با 401 برمی‌گشت و چون
+ * هیچ `onError` ای نبود، دکمهٔ «انجام شد» **بی‌صدا** هیچ کاری نمی‌کرد و
+ * هیچ telemetry ای ثبت نمی‌شد. حالا یک‌بار initData تازه گرفته و درخواست
+ * تکرار می‌شود.
+ */
 export async function callApi<T>(
+  action: string,
+  options: CallOptions = {}
+): Promise<T> {
+  try {
+    return await callApiOnce<T>(action, options);
+  } catch (err) {
+    const authFail =
+      err instanceof ApiClientError && err.isAuthError && action !== 'auth';
+    if (!authFail || options.anonymous) throw err;
+
+    try {
+      const fresh = await authenticate();
+      setToken(fresh.token);
+      return await callApiOnce<T>(action, options);
+    } catch {
+      throw err;
+    }
+  }
+}
+
+async function callApiOnce<T>(
   action: string,
   options: CallOptions = {}
 ): Promise<T> {

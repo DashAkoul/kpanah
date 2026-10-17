@@ -108,6 +108,9 @@ export default {
       dialogue: 'گفتگو',
       finishPart: 'پایان بخش {{part}}',
       completing: 'در حال ثبت…',
+      pickOne: 'یکی را انتخاب کن',
+      yourSentence: 'جملهٔ ساخته‌شده',
+      audioFailed: 'پخش نشد — دوباره بزن',
       listenAgain: 'دوباره بشنو',
     },
     profile: {

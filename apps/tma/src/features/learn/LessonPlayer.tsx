@@ -41,6 +41,8 @@ export function LessonPlayer({
   const [itemIndex, setItemIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
+  // انتخاب اسلات در تمرین جایگزینی (بخش ۱) — قبلاً هیچ‌کدام قابل انتخاب نبود
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [usedHint, setUsedHint] = useState(false);
 
   const { part1Items, part2Scenario, part2Questions } = useMemo(
@@ -74,6 +76,7 @@ export function LessonPlayer({
       if (itemIndex + 1 < part1Items.length) {
         setItemIndex(itemIndex + 1);
         setRevealed(false);
+        setSelectedSlot(null);
         setUsedHint(false);
         session.markItemStart();
       } else {
@@ -146,6 +149,13 @@ export function LessonPlayer({
             item={currentItem}
             revealed={revealed}
             usedHint={usedHint}
+            selectedSlot={selectedSlot}
+            onSelectSlot={(i) => {
+              if (!revealed) {
+                setSelectedSlot(i);
+                haptic('tap');
+              }
+            }}
             onReveal={() => {
               setRevealed(true);
               setUsedHint(true);
@@ -175,6 +185,7 @@ export function LessonPlayer({
         {part === 1 && currentItem && (
           <Part1Actions
             revealed={revealed}
+            canCheck={!currentItem.substitution || selectedSlot !== null}
             onReveal={() => {
               setRevealed(true);
               setUsedHint(true);
@@ -203,18 +214,23 @@ export function LessonPlayer({
 
 function Part1Actions({
   revealed,
+  canCheck,
   onReveal,
   onAnswer,
 }: {
   revealed: boolean;
+  canCheck: boolean;
   onReveal: () => void;
   onAnswer: (knewIt: boolean) => void;
 }) {
   const { t } = useTranslation();
 
   if (!revealed) {
+    // ⚠️ قبلاً این دکمه همیشه فعال بود ولی هیچ چیزی را «بررسی» نمی‌کرد.
+    // حالا تا وقتی گزینه‌ای انتخاب نشده غیرفعال است تا کاربر بفهمد باید
+    // اول یکی از اسلات‌ها را بزند.
     return (
-      <Button fullWidth onClick={onReveal}>
+      <Button fullWidth disabled={!canCheck} onClick={onReveal}>
         {t('lesson.checkAnswer')}
       </Button>
     );
@@ -233,16 +249,18 @@ function Part1Actions({
 /** دکمهٔ پخش تلفظ — از speakText استفاده می‌کند (اگر موجود باشد) */
 function SpeakButton({ text }: { text: string }) {
   const { t } = useTranslation();
-  const { play, loading, playing } = useAudio();
+  const { play, loading, playing, error } = useAudio();
   const targetLanguage = useSessionStore((s) => s.user?.targetLanguage);
 
   const busy = loading || playing;
-  const icon = loading ? '⏳' : playing ? '🔈' : '🔊';
+  const icon = loading ? '⏳' : playing ? '🔈' : error ? '⚠️' : '🔊';
   const label = loading
     ? t('lesson.loadingAudio')
     : playing
       ? t('lesson.playing')
-      : t('lesson.listen');
+      : error
+        ? t('lesson.audioFailed')
+        : t('lesson.listen');
 
   return (
     <button
@@ -267,18 +285,37 @@ function PatternItemView({
   item,
   revealed,
   usedHint,
+  selectedSlot,
+  onSelectSlot,
   onReveal,
 }: {
   item: PatternDrillItem;
   revealed: boolean;
   usedHint: boolean;
+  selectedSlot: number | null;
+  onSelectSlot: (index: number) => void;
   onReveal: () => void;
 }) {
   const { t } = useTranslation();
 
+  // جملهٔ ساخته‌شده با اسلات انتخاب‌شده (___ را جایگزین می‌کند)
+  const chosen =
+    item.substitution && selectedSlot !== null
+      ? item.substitution.slots[selectedSlot]
+      : null;
+  const filledSentence = item.substitution
+    ? chosen
+      ? item.substitution.base.replace(/_{2,}/, chosen)
+      : item.substitution.base
+    : null;
+
   return (
     <div className="space-y-4">
-      {/* The pattern / term */}
+      {/*
+        ⚠️ الگو همیشه کامل نمایش داده می‌شود (معنی + مثال + تلفظ).
+        قبلاً معنی پشت دکمهٔ «ادامه» پنهان بود و کاربر اول تمرین را می‌دید،
+        بعد الگو را — ترتیب آموزشی برعکس بود. ترتیب درست: اول الگو، بعد تمرین.
+      */}
       <Card className="text-center">
         <p className="text-xs text-text-hint">{t('lesson.meaning')}</p>
 
@@ -296,60 +333,74 @@ function PatternItemView({
           </p>
         )}
 
-        {revealed ? (
-          <div className="mt-4 space-y-3 border-t border-border pt-4 text-start">
-            <div>
-              <p className="text-[11px] font-medium text-text-hint">{t('lesson.meaning')}</p>
-              <p className="mt-0.5 text-sm text-text">{item.meaning}</p>
-            </div>
-
-            <div>
-              <p className="text-[11px] font-medium text-text-hint">{t('lesson.example')}</p>
-              <p className="target-text mt-0.5 text-sm font-medium text-text" dir="ltr">
-                {item.example}
-              </p>
-              {item.exampleTranslation && (
-                <p className="mt-0.5 text-xs text-text-hint">{item.exampleTranslation}</p>
-              )}
-            </div>
+        <div className="mt-4 space-y-3 border-t border-border pt-4 text-start">
+          <div>
+            <p className="text-[11px] font-medium text-text-hint">{t('lesson.meaning')}</p>
+            <p className="mt-0.5 text-sm text-text">{item.meaning}</p>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={onReveal}
-            className="mx-auto mt-4 block text-xs font-medium text-accent"
-          >
-            {t('common.continue')} ↓
-          </button>
-        )}
+
+          <div>
+            <p className="text-[11px] font-medium text-text-hint">{t('lesson.example')}</p>
+            <p className="target-text mt-0.5 text-sm font-medium text-text" dir="ltr">
+              {item.example}
+            </p>
+            {item.exampleTranslation && (
+              <p className="mt-0.5 text-xs text-text-hint">{item.exampleTranslation}</p>
+            )}
+          </div>
+        </div>
       </Card>
 
-      {/* Substitution drill — the core pedagogical device */}
+      {/* تمرین جایگزینی — اسلات‌ها حالا واقعاً قابل انتخاب‌اند */}
       {item.substitution && (
         <Card className="border-dashed">
-          <p className="mb-2 text-[11px] font-medium text-text-hint">
-            🧩 {(t('learn.subtitlePattern'))} — تمرین جایگزینی
+          <p className="mb-1 text-[11px] font-medium text-text-hint">
+            🧩 {t('learn.subtitlePattern')}
           </p>
+          <p className="mb-2 text-[11px] text-text-muted">{t('lesson.pickOne')}</p>
 
           <p className="target-text text-sm font-medium text-text" dir="ltr">
-            {item.substitution.base}
+            {filledSentence}
           </p>
 
+          {chosen && (
+            <p className="mt-2 text-[11px] text-text-hint">
+              {t('lesson.yourSentence')}: <span className="target-text" dir="ltr">{filledSentence}</span>
+            </p>
+          )}
+
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {item.substitution.slots.map((slot) => (
-              <span
-                key={slot}
-                className="target-text chip border border-border bg-[var(--surface-sunken)] text-text"
-                dir="ltr"
-              >
-                {slot}
-              </span>
-            ))}
+            {item.substitution.slots.map((slot, i) => {
+              const isChosen = selectedSlot === i;
+              return (
+                <button
+                  key={slot}
+                  type="button"
+                  disabled={revealed}
+                  onClick={() => onSelectSlot(i)}
+                  className={clsx(
+                    'target-text rounded-full border px-3 py-1.5 text-xs font-medium transition active:scale-95',
+                    isChosen
+                      ? 'border-brand-500 bg-brand-50 font-semibold text-brand-700'
+                      : 'border-border bg-[var(--surface-sunken)] text-text',
+                    revealed && !isChosen && 'opacity-50'
+                  )}
+                  dir="ltr"
+                >
+                  {slot}
+                </button>
+              );
+            })}
           </div>
+
+          {revealed && chosen && (
+            <p className="mt-2 text-[11px] text-success-600">
+              ✓ {filledSentence}
+            </p>
+          )}
         </Card>
       )}
 
-      {/* Micro exercises */}
       {revealed && item.box !== undefined && (
         <p className="text-center text-[11px] text-text-muted">
           📦 جعبه لایتنر: {item.box}/5

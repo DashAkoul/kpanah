@@ -2105,6 +2105,10 @@ export function toCycleDto(
 }
 
 export function toLessonDto(row: LessonRow): Lesson {
+  // ⚠️ `_cv` نشانهٔ نسخهٔ محتواست (در DB می‌ماند تا محتوای قدیمی تشخیص داده
+  // و بازتولید شود) ولی نباید به کلاینت برود.
+  const part1 = { ...(row.part_1_data as Record<string, unknown>) };
+  delete part1._cv;
   return {
     id: row.id,
     cycleId: row.cycle_id,
@@ -2112,7 +2116,7 @@ export function toLessonDto(row: LessonRow): Lesson {
     title: row.title,
     titleFa: row.title_fa,
     kind: row.kind,
-    part1: row.part_1_data as Lesson['part1'],
+    part1: part1 as unknown as Lesson['part1'],
     part2: row.part_2_data as Lesson['part2'],
     status: row.status as Lesson['status'],
     isCompleted: row.is_completed,

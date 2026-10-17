@@ -11,14 +11,60 @@ import { useAudio } from '../../hooks/useAudio';
 /**
  * Lesson player.
  *
- * Flow: Part 1 (pattern items, one per screen) → Part 2 (scenario + MCQ).
- * Every answer is timed and buffered in the session store; only the
- * completed lesson is submitted, so a mid-lesson drop loses nothing but
- * the current item.
+ * Flow:
+ *   Part 1 — for every term:
+ *     (a) choose the correct MEANING from 3 options   → scored
+ *     (b) choose the correct EXAMPLE from 3 options   → scored
+ *     (c) reveal the full card (meaning + example + audio)
+ *     (d) complete the substitution PATTERN (1 of 3)  → scored
+ *   Part 2 — scenario + MCQ.
+ *
+ * ⚠️ چرا سه سؤال در بخش ۱: قبلاً معنی/مثال مستقیم نشان داده می‌شد و
+ * «بررسی پاسخ» هیچ چیزی را بررسی نمی‌کرد؛ سیستم هم نمی‌توانست عملکرد
+ * کاربر را ردیابی کند. حالا هر آیتم سه پاسخ قابل‌ثبت تولید می‌کند.
  *
  * Deliberately absent: any hint that a given day is an assessment.
- * (Day 6 uses this exact component with no visual difference.)
  */
+type P1Step = 'meaning' | 'example' | 'reveal' | 'pattern';
+
+/** اولین مرحله‌ای که این آیتم پشتیبانی می‌کند */
+function firstStep(item: PatternDrillItem | undefined): P1Step {
+  if (item?.meaningOptions) return 'meaning';
+  if (item?.exampleOptions) return 'example';
+  return 'reveal';
+}
+
+/** مرحلهٔ بعدی؛ `null` یعنی «برو آیتم بعد» */
+function stepAfter(step: P1Step, item: PatternDrillItem | undefined): P1Step | null {
+  if (step === 'meaning') return item?.exampleOptions ? 'example' : 'reveal';
+  if (step === 'example') return 'reveal';
+  if (step === 'reveal') {
+    // الگو فقط وقتی سؤال می‌شود که پاسخ درست مشخص باشد
+    if (item?.substitution && item.substitution.correctIndex !== undefined) return 'pattern';
+    return null;
+  }
+  return null;
+}
+
+interface Choice {
+  options: string[];
+  correctIndex: number;
+}
+
+/** گزینه‌های مرحلهٔ جاری (یا `undefined` اگر این مرحله سؤال ندارد) */
+function choiceFor(item: PatternDrillItem | undefined, step: P1Step): Choice | undefined {
+  if (!item) return undefined;
+  if (step === 'meaning') return item.meaningOptions;
+  if (step === 'example') return item.exampleOptions;
+  if (step === 'pattern' && item.substitution) {
+    return {
+      options: item.substitution.slots,
+      correctIndex: item.substitution.correctIndex ?? 0,
+    };
+  }
+  return undefined;
+}
+
 export function LessonPlayer({
   lesson,
   onFinish,
@@ -41,8 +87,6 @@ export function LessonPlayer({
   const [itemIndex, setItemIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
-  // انتخاب اسلات در تمرین جایگزینی (بخش ۱) — قبلاً هیچ‌کدام قابل انتخاب نبود
-  const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
   const [usedHint, setUsedHint] = useState(false);
 
   const { part1Items, part2Scenario, part2Questions } = useMemo(
@@ -54,43 +98,84 @@ export function LessonPlayer({
     [lesson]
   );
 
+  // ── Part 1 state ──────────────────────────────────────────────────
+  const [p1Step, setP1Step] = useState<P1Step>(() => firstStep(part1Items[0]));
+  const [p1Selected, setP1Selected] = useState<number | null>(null);
+  const [p1Checked, setP1Checked] = useState(false);
+
   const totalItems = part1Items.length + part2Questions.length;
   const doneItems = part === 1 ? itemIndex : part1Items.length + itemIndex;
 
-  // ── Part 1: self-assessed pattern drill ───────────────────────────
   const currentItem: PatternDrillItem | undefined = part1Items[itemIndex];
+  const currentChoice = choiceFor(currentItem, p1Step);
 
-  const advancePart1 = useCallback(
+  /** آیتم بعدی یا ورود به بخش ۲ */
+  const advanceItem = useCallback(() => {
+    if (itemIndex + 1 < part1Items.length) {
+      const next = part1Items[itemIndex + 1];
+      setItemIndex(itemIndex + 1);
+      setP1Step(firstStep(next));
+      setP1Selected(null);
+      setP1Checked(false);
+      session.markItemStart();
+      return;
+    }
+    setPart(2);
+    setItemIndex(0);
+    setSelected(null);
+    // ⚠️ باگ رفع‌شده: `revealed` ریست نمی‌شد؛ اولین سؤال بخش ۲ با
+    // revealed=true رندر می‌شد و جواب درست از قبل سبز دیده می‌شد.
+    setRevealed(false);
+    setUsedHint(false);
+    session.setPart(2);
+    session.markItemStart();
+  }, [itemIndex, part1Items, session]);
+
+  /** بررسی پاسخ بخش ۱ و ثبت آن در آمار */
+  const checkP1 = useCallback(() => {
+    if (!currentItem || p1Selected === null || !currentChoice) return;
+
+    const isCorrect = p1Selected === currentChoice.correctIndex;
+    session.recordAnswer({
+      itemId: `${p1Step}-${itemIndex}`,
+      isCorrect,
+      linkedTerm: currentItem.term,
+      usedHint: false,
+    });
+    haptic(isCorrect ? 'success' : 'error');
+    setP1Checked(true);
+  }, [currentItem, currentChoice, p1Selected, p1Step, itemIndex, session]);
+
+  /** رفتن به مرحلهٔ بعدی (یا آیتم بعدی) */
+  const nextP1 = useCallback(() => {
+    const next = stepAfter(p1Step, currentItem);
+    if (next) {
+      setP1Step(next);
+      setP1Selected(null);
+      setP1Checked(false);
+      session.markItemStart();
+      return;
+    }
+    advanceItem();
+  }, [p1Step, currentItem, session, advanceItem]);
+
+  /** خودارزیابی — فقط برای محتوای قدیمی که گزینه ندارد */
+  const selfAssess = useCallback(
     (knewIt: boolean) => {
       if (!currentItem) return;
-
       session.recordAnswer({
         itemId: `term-${itemIndex}`,
         isCorrect: knewIt,
         linkedTerm: currentItem.term,
         usedHint,
       });
-
       haptic(knewIt ? 'success' : 'warning');
-
-      if (itemIndex + 1 < part1Items.length) {
-        setItemIndex(itemIndex + 1);
-        setRevealed(false);
-        setSelectedSlot(null);
-        setUsedHint(false);
-        session.markItemStart();
-      } else {
-        setPart(2);
-        setItemIndex(0);
-        setSelected(null);
-        session.setPart(2);
-        session.markItemStart();
-      }
+      advanceItem();
     },
-    [currentItem, itemIndex, part1Items.length, session, usedHint]
+    [currentItem, itemIndex, session, usedHint, advanceItem]
   );
 
-  // ── Part 2: multiple-choice application ───────────────────────────
+  // ── Part 2 ────────────────────────────────────────────────────────
   const currentQuestion: ApplicationQuestion | undefined = part2Questions[itemIndex];
 
   const checkAnswer = useCallback(() => {
@@ -147,18 +232,15 @@ export function LessonPlayer({
         {part === 1 && currentItem && (
           <PatternItemView
             item={currentItem}
-            revealed={revealed}
-            usedHint={usedHint}
-            selectedSlot={selectedSlot}
-            onSelectSlot={(i) => {
-              if (!revealed) {
-                setSelectedSlot(i);
+            step={p1Step}
+            selected={p1Selected}
+            checked={p1Checked}
+            choice={currentChoice}
+            onSelect={(i) => {
+              if (!p1Checked) {
+                setP1Selected(i);
                 haptic('tap');
               }
-            }}
-            onReveal={() => {
-              setRevealed(true);
-              setUsedHint(true);
             }}
           />
         )}
@@ -184,13 +266,13 @@ export function LessonPlayer({
       <div className="safe-bottom sticky bottom-0 border-t border-border bg-bg/95 px-4 py-3 backdrop-blur">
         {part === 1 && currentItem && (
           <Part1Actions
-            revealed={revealed}
-            canCheck={!currentItem.substitution || selectedSlot !== null}
-            onReveal={() => {
-              setRevealed(true);
-              setUsedHint(true);
-            }}
-            onAnswer={advancePart1}
+            step={p1Step}
+            hasChoice={Boolean(currentChoice)}
+            checked={p1Checked}
+            canCheck={p1Selected !== null}
+            onCheck={checkP1}
+            onNext={nextP1}
+            onSelfAssess={selfAssess}
           />
         )}
 
@@ -209,45 +291,65 @@ export function LessonPlayer({
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Part 1
+// Part 1 — actions
 // ═════════════════════════════════════════════════════════════════════
 
 function Part1Actions({
-  revealed,
+  step,
+  hasChoice,
+  checked,
   canCheck,
-  onReveal,
-  onAnswer,
+  onCheck,
+  onNext,
+  onSelfAssess,
 }: {
-  revealed: boolean;
+  step: P1Step;
+  hasChoice: boolean;
+  checked: boolean;
   canCheck: boolean;
-  onReveal: () => void;
-  onAnswer: (knewIt: boolean) => void;
+  onCheck: () => void;
+  onNext: () => void;
+  onSelfAssess: (knewIt: boolean) => void;
 }) {
   const { t } = useTranslation();
 
-  if (!revealed) {
-    // ⚠️ قبلاً این دکمه همیشه فعال بود ولی هیچ چیزی را «بررسی» نمی‌کرد.
-    // حالا تا وقتی گزینه‌ای انتخاب نشده غیرفعال است تا کاربر بفهمد باید
-    // اول یکی از اسلات‌ها را بزند.
+  // محتوای قدیمی (بدون گزینه و بدون پاسخ الگو) → خودارزیابی
+  if (step === 'reveal' && !hasChoice) {
     return (
-      <Button fullWidth disabled={!canCheck} onClick={onReveal}>
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="secondary" onClick={() => onSelfAssess(false)}>
+          🤔 سخت بود
+        </Button>
+        <Button onClick={() => onSelfAssess(true)}>😎 مسلط بودم</Button>
+      </div>
+    );
+  }
+
+  if (step === 'reveal') {
+    return (
+      <Button fullWidth onClick={onNext}>
+        {t('common.continue')}
+      </Button>
+    );
+  }
+
+  if (!checked) {
+    return (
+      <Button fullWidth disabled={!canCheck} onClick={onCheck}>
         {t('lesson.checkAnswer')}
       </Button>
     );
   }
 
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <Button variant="secondary" onClick={() => onAnswer(false)}>
-        🤔 سخت بود
-      </Button>
-      <Button onClick={() => onAnswer(true)}>😎 مسلط بودم</Button>
-    </div>
+    <Button fullWidth onClick={onNext}>
+      {t('common.next')}
+    </Button>
   );
 }
 
-/** دکمهٔ پخش تلفظ — از speakText استفاده می‌کند (اگر موجود باشد) */
-function SpeakButton({ text }: { text: string }) {
+/** دکمهٔ پخش تلفظ — همیشه خودِ متن داده‌شده را می‌خواند */
+function SpeakButton({ text, compact }: { text: string; compact?: boolean }) {
   const { t } = useTranslation();
   const { play, loading, playing, error } = useAudio();
   const targetLanguage = useSessionStore((s) => s.user?.targetLanguage);
@@ -271,7 +373,8 @@ function SpeakButton({ text }: { text: string }) {
         void play(text, targetLanguage ?? 'en');
       }}
       className={clsx(
-        'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition active:scale-95',
+        'inline-flex items-center gap-1 rounded-full font-medium transition active:scale-95',
+        compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-[11px]',
         busy ? 'bg-[var(--surface-sunken)] text-text-muted' : 'bg-brand-50 text-brand-600'
       )}
     >
@@ -281,50 +384,59 @@ function SpeakButton({ text }: { text: string }) {
   );
 }
 
+// ═════════════════════════════════════════════════════════════════════
+// Part 1 — view
+// ═════════════════════════════════════════════════════════════════════
+
 function PatternItemView({
   item,
-  revealed,
-  usedHint,
-  selectedSlot,
-  onSelectSlot,
-  onReveal,
+  step,
+  selected,
+  checked,
+  choice,
+  onSelect,
 }: {
   item: PatternDrillItem;
-  revealed: boolean;
-  usedHint: boolean;
-  selectedSlot: number | null;
-  onSelectSlot: (index: number) => void;
-  onReveal: () => void;
+  step: P1Step;
+  selected: number | null;
+  checked: boolean;
+  choice: Choice | undefined;
+  onSelect: (index: number) => void;
 }) {
   const { t } = useTranslation();
 
-  // جملهٔ ساخته‌شده با اسلات انتخاب‌شده (___ را جایگزین می‌کند)
+  const showDetails = step === 'reveal' || step === 'pattern';
   const chosen =
-    item.substitution && selectedSlot !== null
-      ? item.substitution.slots[selectedSlot]
+    step === 'pattern' && selected !== null && item.substitution
+      ? item.substitution.slots[selected]
       : null;
-  const filledSentence = item.substitution
-    ? chosen
+  const filled =
+    item.substitution && chosen
       ? item.substitution.base.replace(/_{2,}/, chosen)
-      : item.substitution.base
-    : null;
+      : item.substitution?.base;
+
+  const question =
+    step === 'meaning'
+      ? t('lesson.whichMeaning')
+      : step === 'example'
+        ? t('lesson.whichExample')
+        : step === 'pattern'
+          ? t('lesson.whichCompletion')
+          : null;
 
   return (
     <div className="space-y-4">
-      {/*
-        ⚠️ الگو همیشه کامل نمایش داده می‌شود (معنی + مثال + تلفظ).
-        قبلاً معنی پشت دکمهٔ «ادامه» پنهان بود و کاربر اول تمرین را می‌دید،
-        بعد الگو را — ترتیب آموزشی برعکس بود. ترتیب درست: اول الگو، بعد تمرین.
-      */}
+      {/* کارت واژه — معنی/مثال فقط بعد از پاسخ‌دادن آشکار می‌شود */}
       <Card className="text-center">
-        <p className="text-xs text-text-hint">{t('lesson.meaning')}</p>
+        <p className="text-xs text-text-hint">{t('lesson.term')}</p>
 
         <h2 className="target-text mt-2 text-2xl font-bold leading-tight text-text" dir="ltr">
           {item.term}
         </h2>
 
         <div className="mt-2 flex items-center justify-center gap-2">
-          <SpeakButton text={item.speakText ?? item.term} />
+          {/* ⚠️ باگ رفع‌شده: قبلاً speakText (که مثال بود) خوانده می‌شد */}
+          <SpeakButton text={item.term} />
         </div>
 
         {item.pronunciation && (
@@ -333,81 +445,157 @@ function PatternItemView({
           </p>
         )}
 
-        <div className="mt-4 space-y-3 border-t border-border pt-4 text-start">
-          <div>
-            <p className="text-[11px] font-medium text-text-hint">{t('lesson.meaning')}</p>
-            <p className="mt-0.5 text-sm text-text">{item.meaning}</p>
-          </div>
+        {showDetails && (
+          <div className="mt-4 space-y-3 border-t border-border pt-4 text-start">
+            <div>
+              <p className="text-[11px] font-medium text-text-hint">{t('lesson.meaning')}</p>
+              <p className="mt-0.5 text-sm text-text">{item.meaning}</p>
+            </div>
 
-          <div>
-            <p className="text-[11px] font-medium text-text-hint">{t('lesson.example')}</p>
-            <p className="target-text mt-0.5 text-sm font-medium text-text" dir="ltr">
-              {item.example}
-            </p>
-            {item.exampleTranslation && (
-              <p className="mt-0.5 text-xs text-text-hint">{item.exampleTranslation}</p>
-            )}
+            <div>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-medium text-text-hint">{t('lesson.example')}</p>
+                <SpeakButton text={item.example} compact />
+              </div>
+              <p className="target-text mt-0.5 text-sm font-medium text-text" dir="ltr">
+                {item.example}
+              </p>
+              {item.exampleTranslation && (
+                <p className="mt-0.5 text-xs text-text-hint">{item.exampleTranslation}</p>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </Card>
 
-      {/* تمرین جایگزینی — اسلات‌ها حالا واقعاً قابل انتخاب‌اند */}
-      {item.substitution && (
-        <Card className="border-dashed">
-          <p className="mb-1 text-[11px] font-medium text-text-hint">
-            🧩 {t('learn.subtitlePattern')}
-          </p>
-          <p className="mb-2 text-[11px] text-text-muted">{t('lesson.pickOne')}</p>
-
-          <p className="target-text text-sm font-medium text-text" dir="ltr">
-            {filledSentence}
-          </p>
-
-          {chosen && (
-            <p className="mt-2 text-[11px] text-text-hint">
-              {t('lesson.yourSentence')}: <span className="target-text" dir="ltr">{filledSentence}</span>
+      {/* سؤال مرحلهٔ جاری */}
+      {choice && step !== 'reveal' && (
+        <Card className={clsx(step === 'pattern' && 'border-dashed')}>
+          {step === 'pattern' && (
+            <p className="mb-1 text-[11px] font-medium text-text-hint">
+              🧩 {t('learn.subtitlePattern')}
             </p>
           )}
 
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {item.substitution.slots.map((slot, i) => {
-              const isChosen = selectedSlot === i;
-              return (
-                <button
-                  key={slot}
-                  type="button"
-                  disabled={revealed}
-                  onClick={() => onSelectSlot(i)}
-                  className={clsx(
-                    'target-text rounded-full border px-3 py-1.5 text-xs font-medium transition active:scale-95',
-                    isChosen
-                      ? 'border-brand-500 bg-brand-50 font-semibold text-brand-700'
-                      : 'border-border bg-[var(--surface-sunken)] text-text',
-                    revealed && !isChosen && 'opacity-50'
-                  )}
-                  dir="ltr"
-                >
-                  {slot}
-                </button>
-              );
-            })}
-          </div>
+          <p className="mb-2 text-sm font-semibold leading-relaxed text-text">{question}</p>
 
-          {revealed && chosen && (
-            <p className="mt-2 text-[11px] text-success-600">
-              ✓ {filledSentence}
+          {step === 'pattern' && (
+            <p className="target-text mb-3 text-sm font-medium text-text" dir="ltr">
+              {filled}
             </p>
+          )}
+
+          <ChoiceList
+            options={choice.options}
+            correctIndex={choice.correctIndex}
+            selected={selected}
+            checked={checked}
+            onSelect={onSelect}
+            ltr={step !== 'meaning'}
+          />
+
+          {checked && (
+            <div
+              className={clsx(
+                'mt-3 rounded-xl border p-3 text-start',
+                selected === choice.correctIndex
+                  ? 'border-success-500/30 bg-success-100/50'
+                  : 'border-danger-500/30 bg-danger-100/50'
+              )}
+            >
+              <p className="text-xs font-semibold text-text">
+                {selected === choice.correctIndex ? t('lesson.correct') : t('lesson.incorrect')}
+              </p>
+              <p
+                className={clsx(
+                  'mt-1 text-sm font-medium text-text',
+                  step !== 'meaning' && 'target-text'
+                )}
+                dir={step !== 'meaning' ? 'ltr' : undefined}
+              >
+                {choice.options[choice.correctIndex]}
+              </p>
+            </div>
           )}
         </Card>
       )}
 
-      {revealed && item.box !== undefined && (
+      {checked && step === 'pattern' && chosen && (
         <p className="text-center text-[11px] text-text-muted">
-          📦 جعبه لایتنر: {item.box}/5
+          {t('lesson.yourSentence')}:{' '}
+          <span className="target-text" dir="ltr">
+            {filled}
+          </span>
         </p>
       )}
+    </div>
+  );
+}
 
-      {usedHint && null}
+/** لیست گزینه‌های انتخاب‌شدنی با بازخورد درست/غلط */
+function ChoiceList({
+  options,
+  correctIndex,
+  selected,
+  checked,
+  onSelect,
+  ltr,
+}: {
+  options: string[];
+  correctIndex: number;
+  selected: number | null;
+  checked: boolean;
+  onSelect: (index: number) => void;
+  ltr: boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      {options.map((option, index) => {
+        const isSelected = selected === index;
+        const isCorrect = index === correctIndex;
+
+        return (
+          <button
+            key={`${option}-${index}`}
+            type="button"
+            onClick={() => onSelect(index)}
+            disabled={checked}
+            className={clsx(
+              'w-full rounded-xl border p-3 text-start transition-all active:scale-[0.99]',
+              !checked && isSelected && 'border-brand-500 bg-brand-50',
+              !checked && !isSelected && 'border-border bg-card',
+              checked && isCorrect && 'border-success-500 bg-success-100',
+              checked && isSelected && !isCorrect && 'border-danger-500 bg-danger-100',
+              checked && !isCorrect && !isSelected && 'border-border bg-card opacity-60'
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <span
+                className={clsx(
+                  'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold',
+                  !checked && isSelected && 'border-brand-500 bg-brand-500 text-white',
+                  !checked && !isSelected && 'border-border text-text-muted',
+                  checked && isCorrect && 'border-success-500 bg-success-500 text-white',
+                  checked && isSelected && !isCorrect && 'border-danger-500 bg-danger-500 text-white'
+                )}
+              >
+                {checked && isCorrect
+                  ? '✓'
+                  : checked && isSelected
+                    ? '✕'
+                    : String.fromCharCode(65 + index)}
+              </span>
+
+              <span
+                className={clsx('flex-1 text-sm leading-relaxed text-text', ltr && 'target-text')}
+                dir={ltr ? 'ltr' : undefined}
+              >
+                {option}
+              </span>
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -476,50 +664,14 @@ function ApplicationView({
         <p className="text-sm font-semibold leading-relaxed text-text">{question.prompt}</p>
       </Card>
 
-      <div className="space-y-2">
-        {question.options.map((option, index) => {
-          const isSelected = selected === index;
-          const isCorrect = index === question.correctIndex;
-
-          return (
-            <button
-              key={option}
-              type="button"
-              onClick={() => onSelect(index)}
-              disabled={revealed}
-              className={clsx(
-                'w-full rounded-xl border p-3.5 text-start transition-all active:scale-[0.99]',
-                !revealed && isSelected && 'border-accent bg-accent-soft ring-accent-soft',
-                !revealed && !isSelected && 'border-border bg-card',
-                revealed && isCorrect && 'border-success-500 bg-success-100',
-                revealed && isSelected && !isCorrect && 'border-danger-500 bg-danger-100',
-                revealed && !isCorrect && !isSelected && 'border-border bg-card opacity-60'
-              )}
-            >
-              <div className="flex items-start gap-3">
-                <span
-                  className={clsx(
-                    'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold',
-                    !revealed && isSelected && 'border-accent bg-accent text-accent-text',
-                    !revealed && !isSelected && 'border-border text-text-muted',
-                    revealed && isCorrect && 'border-success-500 bg-success-500 text-white',
-                    revealed && isSelected && !isCorrect && 'border-danger-500 bg-danger-500 text-white'
-                  )}
-                >
-                  {revealed && isCorrect ? '✓' : revealed && isSelected ? '✕' : String.fromCharCode(65 + index)}
-                </span>
-
-                <span
-                  className="target-text flex-1 text-sm leading-relaxed text-text"
-                  dir="ltr"
-                >
-                  {option}
-                </span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
+      <ChoiceList
+        options={question.options}
+        correctIndex={question.correctIndex}
+        selected={selected}
+        checked={revealed}
+        onSelect={onSelect}
+        ltr
+      />
 
       {revealed && (
         <Card

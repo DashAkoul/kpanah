@@ -829,7 +829,29 @@ export class ContentRepository {
     rows: Record<string, unknown>[]
   ): Promise<void> {
     if (rows.length === 0) return;
-    await this.db.insert('telemetry_events', rows);
+
+    /**
+     * ⚠️ باگ بزرگ رفع‌شده: PostgREST در درج گروهی نیاز دارد **همهٔ اشیاء
+     * دقیقاً همان کلیدها** را داشته باشند، وگرنه با `PGRST102
+     * «All object keys must match»` کل درخواست را رد می‌کند.
+     *
+     * ردیف‌های ما شکل یکسان ندارند (LESSON_START فقط payload دارد، ANSWER
+     * هم item_id/is_correct/response_ms دارد). نتیجه: **هیچ تلمتری‌ای
+     * ذخیره نمی‌شد** → «دقت یادگیری» همیشه ۰٪ می‌ماند.
+     *
+     * راه‌حل: اجتماع کلیدها را بساز و هر ردیف را با همان مجموعه (مقدار
+     * غایب = null) نرمال کن.
+     */
+    const keys = new Set<string>();
+    for (const row of rows) for (const k of Object.keys(row)) keys.add(k);
+
+    const normalized = rows.map((row) => {
+      const out: Record<string, unknown> = {};
+      for (const k of keys) out[k] = row[k] ?? null;
+      return out;
+    });
+
+    await this.db.insert('telemetry_events', normalized);
   }
 
   /**

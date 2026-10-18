@@ -138,11 +138,6 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
     );
   }
 
-  // ── 3.5 درس امروز تمام شده — درس بعدی در نیمه‌شب محلی باز می‌شود ──
-  if (!data.lesson && data.nextUnlockAt) {
-    return <NextUnlockState unlockAt={data.nextUnlockAt} />;
-  }
-
   // ── 4. Cycle finished, next not ready ─────────────────────────────
   if (!data.lesson) {
     return <CycleCompleteState />;
@@ -195,17 +190,43 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
         <p className="mb-3 text-xs font-semibold text-text-hint">
           🗺 {t('learn.roadmap')}
         </p>
-        <Roadmap days={data.cycle.days} />
+        <Roadmap
+          days={
+            data.nextUnlockAt
+              ? data.cycle.days.map((d) =>
+                  d.status === 'AVAILABLE'
+                    ? { ...d, status: 'LOCKED' as const, isActive: false, isLocked: true }
+                    : d
+                )
+              : data.cycle.days
+          }
+        />
       </Card>
 
-      {/* Today's lesson */}
-      <LessonCard
-        lesson={data.lesson}
-        dayNumber={data.lesson.dayNumber}
-        completedDays={data.cycle.progress.completedDays}
-        totalDays={data.cycle.progress.totalDays}
-        onStart={onStartLesson}
-      />
+      {/* Today's lesson — یا شمارش معکوس نیمه‌شب محلی */}
+      {data.lesson ? (
+        <LessonCard
+          lesson={data.lesson}
+          dayNumber={data.lesson.dayNumber}
+          completedDays={data.cycle.progress.completedDays}
+          totalDays={data.cycle.progress.totalDays}
+          onStart={onStartLesson}
+        />
+      ) : data.nextUnlockAt ? (
+        <Card>
+          <div className="flex flex-col items-center gap-2 py-3 text-center">
+            <p className="text-sm font-semibold text-text">🌙 {t('learn.doneForToday')}</p>
+            <p className="text-xs text-text-hint">{t('learn.nextLessonAtMidnight')}</p>
+            <WaitTimer
+              minutes={Math.max(
+                1,
+                Math.round((new Date(data.nextUnlockAt).getTime() - Date.now()) / 60_000)
+              )}
+              label={t('learn.untilNextLesson')}
+            />
+          </div>
+        </Card>
+      ) : null}
 
       {/* Streak nudge */}
       {user && user.streakCount > 0 && (
@@ -252,9 +273,43 @@ function GeneratingState({
         </div>
       )}
 
-      <Button variant="secondary" size="sm" onClick={onRefresh}>
-        {t('common.retry')}
-      </Button>
+      {generating ? (
+        <>
+          <WaitTimer minutes={15} label={t('learn.estimatedWait')} />
+          <p className="max-w-[260px] text-[11px] leading-relaxed text-text-muted">
+            {t('learn.firstWaitNote')}
+          </p>
+        </>
+      ) : (
+        <Button variant="secondary" size="sm" onClick={onRefresh}>
+          {t('common.retry')}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * تایمر نمایشی (نه منطقی): فقط برای این‌که انتظار «قابل‌درک» باشد.
+ * ⚠️ به‌محض آماده شدن محتوا، کل این صفحه با محتوای واقعی جایگزین می‌شود.
+ */
+function WaitTimer({ minutes, label }: { minutes: number; label: string }) {
+  const [left, setLeft] = useState(minutes * 60);
+
+  useEffect(() => {
+    const id = setInterval(() => setLeft((v) => (v > 0 ? v - 1 : 0)), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const mm = String(Math.floor(left / 60)).padStart(2, '0');
+  const ss = String(left % 60).padStart(2, '0');
+
+  return (
+    <div className="rounded-xl border border-border bg-[var(--surface-sunken)] px-4 py-2">
+      <p className="font-mono text-lg font-bold text-text" dir="ltr">
+        {mm}:{ss}
+      </p>
+      <p className="text-[10px] text-text-hint">{label}</p>
     </div>
   );
 }

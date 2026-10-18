@@ -109,6 +109,7 @@ export default {
       finishedBody: '{{correct}} of {{total}} correct.',
     },
     lesson: {
+      finishing: 'Moving on…',
       saving: 'Saving…',
       part1Done: 'Part 1 complete 🎉',
       part2Intro: 'Now we use these words in a real situation.',

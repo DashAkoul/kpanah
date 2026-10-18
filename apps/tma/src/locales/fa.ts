@@ -109,6 +109,7 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      finishing: 'در حال رفتن به مرحلهٔ بعد…',
       saving: 'در حال ثبت…',
       part1Done: 'بخش ۱ تمام شد 🎉',
       part2Intro: 'حالا همین واژه‌ها را در یک موقعیت واقعی به کار می‌بریم.',

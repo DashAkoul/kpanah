@@ -70,10 +70,15 @@ export function LessonPlayer({
   lesson,
   onFinish,
   onExit,
+  onPartComplete,
   submitting = false,
 }: {
   lesson: Lesson;
-  /** در حال ثبت نتیجه — دکمهٔ «انجام شد» باید فوراً بازخورد بدهد */
+  /**
+   * یک بخش تمام شد → به صفحهٔ آموزش برگرد (تیک سبز + باز شدن بخش بعد).
+   * بخش آخر (۳ یا ۲ اگر داستانی نیست) با `finish` درس را ثبت می‌کند.
+   */
+  onPartComplete: (part: 1 | 2 | 3) => void;
   submitting?: boolean;
   onFinish: (answers: {
     itemId: string;
@@ -104,11 +109,7 @@ export function LessonPlayer({
 
   // ── Part 1 state ──────────────────────────────────────────────────
   const [p1Step, setP1Step] = useState<P1Step>(() => firstStep(part1Items[0]));
-  /**
-   * مرز بین بخش‌ها — بخش ۱ و ۲ (و ۳) **جدا** هستند و کاربر خودش «ادامه»
-   * را می‌زند؛ قبلاً به‌صورت خودکار وارد بخش بعد می‌شد.
-   */
-  const [showBoundary, setShowBoundary] = useState(false);
+
   const [p1Selected, setP1Selected] = useState<number | null>(null);
   const [p1Checked, setP1Checked] = useState(false);
 
@@ -142,8 +143,14 @@ export function LessonPlayer({
       if (startPart) {
         localStorage.removeItem('kpanah:startPart');
         const p = Number(startPart);
-        if (p === 2) setPart(2);
-        if (p === 3 && lesson.part3) setPart(3);
+        if (p === 2 || (p === 3 && lesson.part3)) {
+          setPart(p as 2 | 3);
+          setItemIndex(0);
+          setSelected(null);
+          setRevealed(false);
+          setP1Checked(false);
+          setP1Selected(null);
+        }
       }
     } catch {
       /* ignore */
@@ -183,25 +190,9 @@ export function LessonPlayer({
     // revealed=true رندر می‌شد و جواب درست از قبل سبز دیده می‌شد.
     setRevealed(false);
     setUsedHint(false);
-    setShowBoundary(true);
-    // بخش ۱ تمام شد → کارت بخش ۲ در صفحهٔ آموزش باز شود
-    try {
-      localStorage.setItem(`kpanah:part1:${lesson.id}`, '1');
-    } catch {
-      /* ignore */
-    }
-  }, [itemIndex, part1Items, session]);
-
-  /** ورود واقعی به بخش ۲ */
-  const startPart2 = useCallback(() => {
-    setShowBoundary(false);
-    setPart(2);
-    setItemIndex(0);
-    setSelected(null);
-    setRevealed(false);
-    session.setPart(2);
-    session.markItemStart();
-  }, [session]);
+    // بخش ۱ تمام شد → خودکار به صفحهٔ آموزش (تیک سبز + باز شدن بخش ۲)
+    onPartComplete(1);
+  }, [itemIndex, part1Items, session, onPartComplete]);
 
   /** بررسی پاسخ بخش ۱ و ثبت آن در آمار */
   const checkP1 = useCallback(() => {
@@ -253,6 +244,24 @@ export function LessonPlayer({
   const storyQuestion: ApplicationQuestion | undefined =
     part === 3 ? storyQuestions[itemIndex] : undefined;
 
+  /**
+   * ⚠️ دکمهٔ «انجام شد» حذف شد: وقتی آخرین سؤالِ آخرین بخش بررسی شد،
+   * بعد از ۱٫۲ ثانیه (تا کاربر بازخورد را ببیند) خودکار ادامه می‌دهیم.
+   */
+  useEffect(() => {
+    if (!revealed) return;
+    const lastP2 = part === 2 && itemIndex + 1 >= part2Questions.length;
+    const lastP3 = part === 3 && itemIndex + 1 >= storyQuestions.length;
+    if (!lastP2 && !lastP3) return;
+    const id = setTimeout(() => {
+      if (lastP3) finish();
+      else if (story) onPartComplete(2);
+      else finish();
+    }, 1200);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealed, part, itemIndex, part2Questions.length, storyQuestions.length, story]);
+
   const finish = useCallback(() => {
     try {
       localStorage.removeItem(`kpanah:lesson:${lesson.id}`);
@@ -289,16 +298,13 @@ export function LessonPlayer({
       setUsedHint(false);
       session.markItemStart();
     } else if (story) {
-      // بخش ۳ — داستان + درک مطلب
-      setPart(3);
-      setItemIndex(0);
-      setSelected(null);
-      setRevealed(false);
-      session.markItemStart();
+      // بخش ۲ تمام شد و داستان داریم → برگرد به آموزش، بخش ۳ باز می‌شود
+      onPartComplete(2);
     } else {
-      onFinish(session.pendingAnswers);
+      // بخش ۲ آخرین بخش است → ثبت درس
+      finish();
     }
-  }, [currentQuestion, itemIndex, part2Questions.length, onFinish, session, story]);
+  }, [currentQuestion, itemIndex, part2Questions.length, session, story, onPartComplete, finish]);
 
   return (
     <div className="flex min-h-[100dvh] flex-col bg-bg">
@@ -322,19 +328,7 @@ export function LessonPlayer({
 
       {/* Body */}
       <div className="flex-1 px-4 py-5">
-        {showBoundary && (
-          <div className="flex flex-col items-center gap-4 py-16 text-center">
-            <div className="text-4xl">✅</div>
-            <h2 className="text-base font-bold text-text">{t('lesson.part1Done')}</h2>
-            <p className="max-w-xs text-sm leading-relaxed text-text-hint">
-              {t('lesson.part2Intro')}
-            </p>
-            <Button className="mt-2 w-full" onClick={startPart2}>
-              {t('lesson.startPart2')}
-            </Button>
-          </div>
-        )}
-        {!showBoundary && part === 1 && currentItem && (
+        {part === 1 && currentItem && (
           <PatternItemView
             item={currentItem}
             step={p1Step}
@@ -384,7 +378,7 @@ export function LessonPlayer({
 
       {/* Footer actions */}
       <div className="safe-bottom sticky bottom-0 border-t border-border bg-bg/95 px-4 py-3 backdrop-blur">
-        {!showBoundary && part === 1 && currentItem && (
+        {part === 1 && currentItem && (
           <Part1Actions
             step={p1Step}
             hasChoice={Boolean(
@@ -814,13 +808,19 @@ function Part2Actions({
     );
   }
 
+  // ⚠️ دکمهٔ «انجام شد» حذف شد: آخرین سؤال بعد از نمایش بازخورد خودکار
+  // ادامه می‌دهد و درس ثبت می‌شود.
+  if (isLast) {
+    return (
+      <p className="py-2 text-center text-xs text-text-hint">
+        {submitting ? t('lesson.saving') : t('lesson.finishing')}
+      </p>
+    );
+  }
+
   return (
-    <Button fullWidth loading={submitting} onClick={onNext}>
-      {submitting
-        ? t('lesson.saving')
-        : isLast
-          ? t('common.done')
-          : t('common.next')}
+    <Button fullWidth onClick={onNext}>
+      {t('common.next')}
     </Button>
   );
 }

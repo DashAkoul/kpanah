@@ -190,6 +190,24 @@ export const applicationQuestionSchema = z
  * `scenarioTranslation` حذف شدند — در UI نمایش داده نمی‌شدند. صحنه و
  * سوالات باقی می‌مانند که هستهٔ ارزش آموزشی‌اند.
  */
+/**
+ * بخش ۳ — داستان/مکالمهٔ کوتاه بر اساس محتوای بخش ۱ و ۲ + سؤالات درک مطلب.
+ *
+ * ⚠️ صدا از سرویس آنلاین (TTS) پخش می‌شود، نه AI. متن یک‌بار در تولید درس
+ * ساخته می‌شود و همان کش می‌شود.
+ */
+export const storyLineSchema = z.object({
+  speaker: z.string().max(60).optional(),
+  text: nonEmpty(400),
+});
+
+export const storyPartSchema = z.object({
+  type: z.literal('STORY'),
+  title: nonEmpty(150),
+  lines: z.array(storyLineSchema).min(3).max(14),
+  questions: z.array(applicationQuestionSchema).min(1).max(5),
+});
+
 export const realApplicationPartSchema = z.object({
   type: z.literal('REAL_APPLICATION'),
   scenario: nonEmpty(600),
@@ -207,6 +225,8 @@ export const generatedLessonSchema = z
     kind: lessonKindSchema,
     part1: patternDrillPartSchema,
     part2: realApplicationPartSchema,
+    /** بخش ۳ — داستان کوتاه + درک مطلب (اختیاری برای محتوای قدیمی) */
+    part3: storyPartSchema.optional(),
   })
   .merge(uiTitleSchema)
   .refine(hasUiTitle, { message: 'a title in the learner UI language is required' })

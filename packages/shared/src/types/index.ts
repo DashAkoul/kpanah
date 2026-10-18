@@ -236,6 +236,8 @@ export interface Lesson {
   kind: LessonKind;
   part1: Part1Data;
   part2: Part2Data;
+  /** بخش ۳ — داستان + درک مطلب (اختیاری؛ محتوای قدیمی ندارد) */
+  part3?: StoryPart;
   status: LessonStatus;
   isCompleted: boolean;
   durationSeconds: number | null;
@@ -315,6 +317,8 @@ export interface CycleGenerationInput {
     learningGoal: string | null;
     uiLanguage: SupportedUiLanguage;
     targetLanguage: SupportedTargetLanguage;
+    /** بودجهٔ زمانی روزانهٔ کاربر (دقیقه) — اندازهٔ درس را تعیین می‌کند */
+    dailyMinutes?: number | null;
   };
   cycleNumber: number;
   delta: SkillDelta;
@@ -334,6 +338,8 @@ export interface GeneratedCycle {
 
 export interface GeneratedLesson {
   dayNumber: number;
+  /** بخش ۳ — داستان کوتاه + درک مطلب (اختیاری) */
+  part3?: StoryPart;
   title: string;
   titleUi: string;
   /** @deprecated فقط برای کش قدیمی */
@@ -641,6 +647,15 @@ export type ApiErrorCode =
   | 'INTERNAL_ERROR'
   | 'AI_UNAVAILABLE';
 
+/** یک واژه در لیست‌های «تثبیت‌شده» / «در حال یادگیری» */
+export interface WordListEntry {
+  term: string;
+  meaning: string;
+  box: number;
+  lapses: number;
+  nextReviewAt: string | null;
+}
+
 export interface ProgressDashboard {
   accuracyPct: number;
   lessonsCompleted: number;
@@ -652,6 +667,18 @@ export interface ProgressDashboard {
   qualitativeSkills: QualitativeSkill[];
   weeklyActivity: { day: string; minutes: number; completed: boolean }[];
   skillBreakdown: { area: string; score: number }[];
+  /** لیست واژه‌ها برای پاپ‌آپ پروفایل */
+  wordLists?: { mastered: WordListEntry[]; learning: WordListEntry[] };
+  /** پیشرفت هر توانایی نسبت به آستانه‌اش */
+  skillProgress?: { key: string; current: number; target: number }[];
+}
+
+/** بخش ۳ درس — داستان کوتاه + درک مطلب */
+export interface StoryPart {
+  type: 'STORY';
+  title: string;
+  lines: { speaker?: string; text: string }[];
+  questions: ApplicationQuestion[];
 }
 
 export interface QualitativeSkill {

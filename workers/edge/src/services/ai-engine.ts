@@ -891,6 +891,8 @@ function buildLessonUserPrompt(
     deltaBlock(input, true),
     '',
     `Content budget for this day (do not exceed):`,
+    `- learner's daily time: about ${input.user.dailyMinutes ?? 15} minutes. Keep the`,
+    `  whole lesson inside it — fewer items beats a lesson that gets cut off.`,
     `- part1 items: ${profile.items.min}-${profile.items.max}`,
     `- part2 questions: ${profile.part2.min}-${profile.part2.max}`,
     `- share of items that must be BRAND NEW: ${Math.round(profile.newItemRatio * 100)}%`,
@@ -912,6 +914,10 @@ function buildLessonUserPrompt(
       : day.kind === 'HIDDEN_ASSESSMENT'
         ? `- This is HIDDEN_ASSESSMENT but must look like a normal teaching day. Never mention tests/scores.`
         : `- part2: REAL_APPLICATION with 2-6 questions in a concrete scenario.`,
+    `- part3: STORY — a short dialogue/story (4-12 short sentences) that REUSES the`,
+    `  words and the pattern of part 1 and the situation of part 2, then 1-4`,
+    `  comprehension questions (in the UI language) about THAT text.`,
+    `  Sentences must be short and speakable — they are read aloud word by word.`,
     `- dayNumber MUST be ${day.dayNumber}, kind MUST be ${day.kind}.`,
     `- title/titleUi should match the outline: "${day.title}".`,
   ].join('\n');
@@ -1110,8 +1116,35 @@ function buildLessonJsonSchema(): Record<string, unknown> {
         },
         required: ['type', 'scenario', 'questions'],
       },
+      part3: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['STORY'] },
+          title: jsonStr('Short title in the target language'),
+          lines: {
+            type: 'array',
+            minItems: 4,
+            maxItems: 12,
+            items: {
+              type: 'object',
+              properties: {
+                speaker: jsonStr('Optional speaker name'),
+                text: jsonStr('One short sentence in the target language'),
+              },
+              required: ['text'],
+            },
+          },
+          questions: {
+            type: 'array',
+            items: applicationQuestionJson(),
+            minItems: 1,
+            maxItems: 4,
+          },
+        },
+        required: ['type', 'title', 'lines', 'questions'],
+      },
     },
-    required: ['dayNumber', 'title', 'titleUi', 'kind', 'part1', 'part2'],
+    required: ['dayNumber', 'title', 'titleUi', 'kind', 'part1', 'part2', 'part3'],
   };
 }
 

@@ -191,6 +191,43 @@ export async function handleHome(
   const lessons = await r.getLessonsForCycle(activeCycle.id);
   const cycleDto = toCycleDto(activeCycle, lessons);
 
+  // ── ترجیحات کاربر (دقایق روزانه) روی پروفایل ──────────────────────
+  const prefs = await r.getUserPrefs(user.id);
+  if (prefs.dailyMinutes) profile.dailyMinutes = prefs.dailyMinutes;
+  if (prefs.dialect) profile.dialect = prefs.dialect;
+
+  /**
+   * ── قاعدهٔ «یک درس در روز» ────────────────────────────────────────
+   *
+   * ⚠️ ملاک، **تکمیل درس قبلی** است؛ اما درس بعدی فقط در نیمه‌شبِ
+   * **منطقهٔ زمانی خود کاربر** باز می‌شود (نه بلافاصله و نه به وقت سرور).
+   * اگر کاربر درس را چند روز طول داده باشد، باز هم همان لحظهٔ تکمیل مبنا
+   * است و نیمه‌شب بعدی باز می‌شود.
+   */
+  const tz = ((user as { timezone?: string | null }).timezone ?? 'UTC') || 'UTC';
+  const nextIncomplete = lessons.find((l) => !l.is_completed);
+  if (nextIncomplete && nextIncomplete.day_number > 1) {
+    const prev = lessons.find((l) => l.day_number === nextIncomplete.day_number - 1);
+    const completedAt = prev?.completed_at;
+    if (prev?.is_completed && completedAt) {
+      const unlockAt = nextLocalMidnightMs(completedAt, tz);
+      if (Date.now() < unlockAt) {
+        return jsonSuccess(
+          {
+            user: profile,
+            cycle: cycleDto,
+            lesson: null,
+            generating: false,
+            generationStatus: null,
+            nextUnlockAt: new Date(unlockAt).toISOString(),
+          },
+          requestId,
+          env
+        );
+      }
+    }
+  }
+
   // در تولید ماژولار، ردیف درس ممکن است ساخته شده باشد ولی محتوایش هنوز
   // نرسیده باشد (`{}`). در آن حالت درس آماده نیست → وضعیت «در حال تولید»
   // نشان داده می‌شود تا UI درس خالی/خراب رندر نکند.
@@ -1103,6 +1140,8 @@ async function buildGenerationInput(
     }
   }
 
+  const prefs = await r.getUserPrefs(user.id);
+
   const delta = buildSkillDelta({
     events: telemetry.map((t) => ({
       eventType: t.event_type,
@@ -1128,6 +1167,7 @@ async function buildGenerationInput(
       learningGoal: user.learning_goal,
       uiLanguage: (user.ui_language ?? 'fa') as never,
       targetLanguage: (user.target_language ?? 'en') as never,
+      dailyMinutes: prefs.dailyMinutes,
     },
     cycleNumber,
     delta,
@@ -1158,7 +1198,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 5;
+export const LESSON_CONTENT_VERSION = 6;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -1358,6 +1398,75 @@ function weaknessFingerprint(input: CycleGenerationInput, enabled: boolean): str
  * **صفر توکن اضافه**. کارتِ موجود مرجع است؛ کارتِ تازه ذخیره می‌شود تا
  * درس‌های بعدی همان را بگیرند («نخستین نوشته برنده است»).
  */
+/**
+ * آفست منطقهٔ زمانی در یک لحظهٔ مشخص (میلی‌ثانیه).
+ * ⚠️ از Intl استفاده می‌کنیم چون Worker دسترسی به کتابخانهٔ tz ندارد.
+ */
+function tzOffsetMs(timeZone: string, at: Date): number {
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = Object.fromEntries(
+      fmt.formatToParts(at).map((x) => [x.type, x.value])
+    ) as Record<string, string>;
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour) % 24,
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    return asUtc - at.getTime();
+  } catch {
+    return 0;
+  }
+}
+
+/** نیمه‌شبِ محلیِ روز بعد از `iso` — به وقت UTC */
+function nextLocalMidnightMs(iso: string, timeZone: string): number {
+  const base = new Date(iso);
+  if (Number.isNaN(base.getTime())) return Date.now();
+
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(base).map((x) => [x.type, x.value])
+  ) as Record<string, string>;
+
+  // نیمه‌شب روز بعد به وقت محلی
+  let guess = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + 1);
+  // دو بار تنظیم تا DST هم درست بماند
+  guess -= tzOffsetMs(timeZone, new Date(guess));
+  guess -= tzOffsetMs(timeZone, new Date(guess)) - tzOffsetMs(timeZone, new Date(guess + 3_600_000));
+  return guess;
+}
+
+/** روز هفتهٔ محلی (۰=شنبه … ۶=جمعه) */
+function localWeekdayIndex(iso: string, timeZone: string): number {
+  try {
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(
+      new Date(iso)
+    );
+    const map: Record<string, number> = { Sat: 0, Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6 };
+    return map[wd] ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** نسخهٔ محتوا را داخل part1 می‌چسباند تا محتوای قدیمی قابل تشخیص باشد */
 function stampContentVersion(lesson: GeneratedLesson): GeneratedLesson {
   return {
@@ -1990,6 +2099,12 @@ export async function handleOnboarding(
     onboarding_done: true,
   });
 
+  // دقایق روزانه و گویش — در app_settings (جدول users این ستون‌ها را ندارد)
+  await r.saveUserPrefs(user.id, {
+    dailyMinutes: parsed.data.dailyMinutes ?? null,
+    dialect: parsed.data.dialect ?? null,
+  });
+
   // اولین چرخه را همین حالا بساز
   const existing = await r.getLatestCycle(user.id);
   if (!existing) {
@@ -2040,23 +2155,31 @@ export async function handleUpdateProfile(
   if (d.learningGoal !== undefined) patch.learning_goal = d.learningGoal;
   if (d.timezone) patch.timezone = d.timezone;
 
-  if (Object.keys(patch).length === 0) {
+  // دقایق روزانه و گویش ستون DB ندارند → در app_settings ذخیره می‌شوند
+  const prefs: { dailyMinutes?: number | null; dialect?: string | null } = {};
+  if (d.dailyMinutes !== undefined) prefs.dailyMinutes = d.dailyMinutes;
+  if (d.dialect !== undefined) prefs.dialect = d.dialect;
+  if (Object.keys(prefs).length > 0) {
+    await r.saveUserPrefs(user.id, prefs);
+  }
+
+  if (Object.keys(patch).length === 0 && Object.keys(prefs).length === 0) {
     return jsonSuccess({ updated: false }, requestId, env);
   }
 
-  const updated = await r.updateUser(user.id, patch);
+  const updated = Object.keys(patch).length
+    ? ((await r.updateUser(user.id, patch)) ?? user)
+    : user;
   const subscription = await r.getActiveSubscription(user.id);
+  const effective = await r.getUserPrefs(user.id);
 
-  return jsonSuccess(
-    {
-      updated: true,
-      user: toUserProfile(updated ?? user, subscription, {
-        isAdmin: isAdminFromEnv(env, telegramId),
-      }),
-    },
-    requestId,
-    env
-  );
+  const profile = toUserProfile(updated, subscription, {
+    isAdmin: isAdminFromEnv(env, telegramId),
+  });
+  profile.dailyMinutes = effective.dailyMinutes;
+  profile.dialect = effective.dialect;
+
+  return jsonSuccess({ updated: true, user: profile }, requestId, env);
 }
 
 export async function handleDeleteAccount(
@@ -2091,13 +2214,32 @@ export async function handleProgress(
   }
   const { user, repo: r } = resolved;
 
-  const cycle = await r.getActiveCycle(user.id);
-  const telemetry = cycle ? await r.getTelemetryForCycle(cycle.id) : [];
   const lexical = await r.getLexicalItems(user.id, user.target_language);
-  const lessons = cycle ? await r.getLessonsForCycle(cycle.id) : [];
+  const completed = await r.listCompletedLessons(user.id);
 
-  // دقایق هفتگی از روی مدت دروس تکمیل‌شده
+  /**
+   * ⚠️ باگ رفع‌شده: قبلاً تلمتری فقط از **چرخهٔ فعال** خوانده می‌شد و
+   * `weeklyMinutes` هم همیشه صفر بود؛ نتیجه: «دقت ۰٪» و نمودار هفتگی خالی
+   * حتی بعد از چند درس. حالا از کل ۳۰ روز و از روی `duration_seconds`
+   * دروس تکمیل‌شده محاسبه می‌شود.
+   */
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const telemetry = await r.getTelemetryForUserSince(user.id, since);
+
+  const tz = ((user as { timezone?: string | null }).timezone ?? 'UTC') || 'UTC';
+  const weekAgo = Date.now() - 7 * 86_400_000;
   const weeklyMinutes = [0, 0, 0, 0, 0, 0, 0];
+  for (const l of completed) {
+    if (!l.completed_at) continue;
+    const at = new Date(l.completed_at).getTime();
+    if (!Number.isFinite(at) || at < weekAgo) continue;
+    const idx = localWeekdayIndex(l.completed_at, tz);
+    weeklyMinutes[idx] = (weeklyMinutes[idx] ?? 0) + Math.round((l.duration_seconds ?? 0) / 60);
+  }
+
+  const totalMinutes = Math.round(
+    completed.reduce((sum, l) => sum + (l.duration_seconds ?? 0), 0) / 60
+  );
 
   const dashboard = buildProgressDashboard({
     telemetry: telemetry.map((t) => ({
@@ -2106,11 +2248,35 @@ export async function handleProgress(
       response_ms: t.response_ms,
       pause_ms: t.pause_ms,
     })),
-    lessonsCompleted: lessons.filter((l) => l.is_completed).length,
+    lessonsCompleted: completed.length,
     lexical: lexical.map((l) => ({ ...l, repetitions: l.repetitions })),
     streakCount: user.streak_count,
     weeklyMinutes,
+    totalMinutes,
   });
+
+  // ── لیست واژه‌ها برای پاپ‌آپ پروفایل ────────────────────────────────
+  const toEntry = (l: (typeof lexical)[number]) => ({
+    term: l.term,
+    meaning: l.meaning_fa ?? '',
+    box: l.box,
+    lapses: l.lapses,
+    nextReviewAt: l.next_review_at ?? null,
+  });
+  dashboard.wordLists = {
+    mastered: lexical.filter((l) => l.mastered).map(toEntry).slice(0, 200),
+    learning: lexical.filter((l) => !l.mastered).map(toEntry).slice(0, 200),
+  };
+
+  // ── پیشرفت توانایی‌ها (چند درس از آستانه) ──────────────────────────
+  const masteredCount = lexical.filter((l) => l.mastered).length;
+  dashboard.skillProgress = [
+    { key: 'greetings', current: completed.length, target: 7 },
+    { key: 'hotel', current: completed.length, target: 14 },
+    { key: 'directions', current: completed.length, target: 21 },
+    { key: 'business', current: completed.length, target: 28 },
+    { key: 'fluent', current: masteredCount, target: 60 },
+  ];
 
   return jsonSuccess({ dashboard }, requestId, env);
 }

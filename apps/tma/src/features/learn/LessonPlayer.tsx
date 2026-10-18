@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { Lesson, PatternDrillItem, ApplicationQuestion } from '@kpanah/shared';
@@ -6,6 +6,7 @@ import { Card, Button, ProgressBar } from '../../components/ui';
 import { useLessonSession } from '../../store/session';
 import { useSessionStore } from '../../store/session';
 import { haptic } from '../../lib/telegram';
+import { API_BASE } from '../../lib/api';
 import { useAudio } from '../../hooks/useAudio';
 
 /**
@@ -83,7 +84,7 @@ export function LessonPlayer({
   const { t } = useTranslation();
   const session = useLessonSession();
 
-  const [part, setPart] = useState<1 | 2>(1);
+  const [part, setPart] = useState<1 | 2 | 3>(1);
   const [itemIndex, setItemIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
@@ -102,6 +103,40 @@ export function LessonPlayer({
   const [p1Step, setP1Step] = useState<P1Step>(() => firstStep(part1Items[0]));
   const [p1Selected, setP1Selected] = useState<number | null>(null);
   const [p1Checked, setP1Checked] = useState(false);
+
+  /**
+   * ⚠️ ادامه از همان‌جا که کاربر خارج شد.
+   * پیشرفت در localStorage نگه داشته می‌شود (سبک، بدون درخواست شبکه).
+   */
+  const progressKey = `kpanah:lesson:${lesson.id}`;
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(progressKey);
+      if (!raw) return;
+      const p = JSON.parse(raw) as {
+        part?: 1 | 2 | 3;
+        itemIndex?: number;
+        p1Step?: P1Step;
+      };
+      if (p.part) setPart(p.part);
+      if (typeof p.itemIndex === 'number') setItemIndex(p.itemIndex);
+      if (p.p1Step) setP1Step(p.p1Step);
+    } catch {
+      /* پیشرفت خراب = شروع از اول */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [progressKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        progressKey,
+        JSON.stringify({ part, itemIndex, p1Step })
+      );
+    } catch {
+      /* ذخیرهٔ پیشرفت اختیاری است */
+    }
+  }, [progressKey, part, itemIndex, p1Step]);
 
   const totalItems = part1Items.length + part2Questions.length;
   const doneItems = part === 1 ? itemIndex : part1Items.length + itemIndex;
@@ -176,6 +211,20 @@ export function LessonPlayer({
   );
 
   // ── Part 2 ────────────────────────────────────────────────────────
+  const story = lesson.part3;
+  const storyQuestions = story?.questions ?? [];
+  const storyQuestion: ApplicationQuestion | undefined =
+    part === 3 ? storyQuestions[itemIndex] : undefined;
+
+  const finish = useCallback(() => {
+    try {
+      localStorage.removeItem(`kpanah:lesson:${lesson.id}`);
+    } catch {
+      /* ignore */
+    }
+    onFinish(session.pendingAnswers);
+  }, [lesson.id, onFinish, session]);
+
   const currentQuestion: ApplicationQuestion | undefined = part2Questions[itemIndex];
 
   const checkAnswer = useCallback(() => {
@@ -202,10 +251,17 @@ export function LessonPlayer({
       setRevealed(false);
       setUsedHint(false);
       session.markItemStart();
+    } else if (story) {
+      // بخش ۳ — داستان + درک مطلب
+      setPart(3);
+      setItemIndex(0);
+      setSelected(null);
+      setRevealed(false);
+      session.markItemStart();
     } else {
       onFinish(session.pendingAnswers);
     }
-  }, [currentQuestion, itemIndex, part2Questions.length, onFinish, session]);
+  }, [currentQuestion, itemIndex, part2Questions.length, onFinish, session, story]);
 
   return (
     <div className="flex min-h-[100dvh] flex-col bg-bg">
@@ -245,6 +301,21 @@ export function LessonPlayer({
           />
         )}
 
+        {part === 3 && story && (
+          <StoryView
+            story={story}
+            question={storyQuestion}
+            selected={selected}
+            revealed={revealed}
+            onSelect={(i: number) => {
+              if (!revealed) {
+                setSelected(i);
+                haptic('tap');
+              }
+            }}
+          />
+        )}
+
         {part === 2 && currentQuestion && (
           <ApplicationView
             scenario={part2Scenario}
@@ -278,6 +349,41 @@ export function LessonPlayer({
             onNext={nextP1}
             onSelfAssess={selfAssess}
           />
+        )}
+
+        {part === 3 && story && storyQuestion && (
+          <Part2Actions
+            revealed={revealed}
+            canCheck={selected !== null}
+            isLast={itemIndex + 1 >= storyQuestions.length}
+            onCheck={() => {
+              if (selected === null) return;
+              const isCorrect = selected === storyQuestion.correctIndex;
+              session.recordAnswer({
+                itemId: `story-${storyQuestion.id}`,
+                isCorrect,
+                linkedTerm: storyQuestion.linkedTerm,
+              });
+              haptic(isCorrect ? 'success' : 'error');
+              setRevealed(true);
+            }}
+            onNext={() => {
+              if (itemIndex + 1 < storyQuestions.length) {
+                setItemIndex(itemIndex + 1);
+                setSelected(null);
+                setRevealed(false);
+                session.markItemStart();
+              } else {
+                finish();
+              }
+            }}
+          />
+        )}
+
+        {part === 3 && story && !storyQuestion && (
+          <Button fullWidth onClick={finish}>
+            {t('common.done')}
+          </Button>
         )}
 
         {part === 2 && currentQuestion && (
@@ -728,6 +834,217 @@ function ApplicationView({
             <p className="mt-2 text-xs leading-relaxed text-text-hint">
               {question.explanation}
             </p>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Part 3 — story + karaoke playback + comprehension
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * پخش داستان با هایلایت کلمهٔ در حال خواندن.
+ *
+ * ⚠️ صدا از سرویس آنلاین رایگان (Google Translate TTS) می‌آید، نه AI.
+ * چون آن سرویس زمان‌بندی کلمه نمی‌دهد، مدت هر کلمه به‌صورت **تخمینی**
+ * (متناسب با طول کلمه) از `duration` کلیپ محاسبه می‌شود — برای کARAOKE
+ * آموزشی کافی است و هیچ هزینهٔ هوش مصنوعی ندارد.
+ */
+function StoryView({
+  story,
+  question,
+  selected,
+  revealed,
+  onSelect,
+}: {
+  story: { title: string; lines: { speaker?: string; text: string }[] };
+  question: ApplicationQuestion | undefined;
+  selected: number | null;
+  revealed: boolean;
+  onSelect: (index: number) => void;
+}) {
+  const { t } = useTranslation();
+  const targetLanguage = useSessionStore((s) => s.user?.targetLanguage);
+  const [activeLine, setActiveLine] = useState<number | null>(null);
+  const [activeWord, setActiveWord] = useState(-1);
+  const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const speak = async (text: string): Promise<string | null> => {
+    try {
+      const res = await fetch(`${API_BASE}/kpanah56/8fjg7rfb/v1/media/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, language: targetLanguage ?? 'en' }),
+      });
+      const payload = (await res.json().catch(() => null)) as
+        | { ok: boolean; data?: { url: string } }
+        | null;
+      if (!payload?.ok || !payload.data?.url) return null;
+      const url = payload.data.url;
+      return /^https?:/i.test(url) ? url : `${API_BASE}${url}`;
+    } catch {
+      return null;
+    }
+  };
+
+  const playLine = async (index: number) => {
+    const line = story.lines[index];
+    if (!line) return;
+    audioRef.current?.pause();
+
+    const url = await speak(line.text);
+    if (!url) return;
+
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    setActiveLine(index);
+    setPlaying(true);
+
+    const words = line.text.split(/\s+/).filter(Boolean);
+    // وزن هر کلمه ≈ طول + ۲ (شکاف بین کلمات)
+    const weights = words.map((w) => w.length + 2);
+    const total = weights.reduce((a, b) => a + b, 0);
+
+    audio.ontimeupdate = () => {
+      if (!audio.duration) return;
+      const progress = audio.currentTime / audio.duration;
+      let acc = 0;
+      for (let i = 0; i < weights.length; i += 1) {
+        acc += (weights[i] ?? 1) / total;
+        if (progress <= acc) {
+          setActiveWord(i);
+          return;
+        }
+      }
+      setActiveWord(words.length - 1);
+    };
+
+    audio.onended = () => {
+      setActiveWord(-1);
+      const next = index + 1;
+      if (next < story.lines.length) {
+        void playLine(next);
+      } else {
+        setPlaying(false);
+        setActiveLine(null);
+      }
+    };
+
+    await audio.play().catch(() => {
+      setPlaying(false);
+      setActiveLine(null);
+    });
+  };
+
+  const stop = () => {
+    audioRef.current?.pause();
+    setPlaying(false);
+    setActiveLine(null);
+    setActiveWord(-1);
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-medium text-text-hint">📖 {t('lesson.story')}</p>
+            <p className="mt-0.5 text-sm font-semibold text-text">{story.title}</p>
+          </div>
+          <Button
+            size="sm"
+            variant={playing ? 'secondary' : 'primary'}
+            onClick={() => (playing ? stop() : void playLine(0))}
+          >
+            {playing ? t('lesson.stop') : t('lesson.playStory')}
+          </Button>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {story.lines.map((line, li) => {
+            const words = line.text.split(/\s+/).filter(Boolean);
+            const isActive = activeLine === li;
+
+            return (
+              <div
+                key={`${li}-${line.text.slice(0, 12)}`}
+                className={clsx(
+                  'rounded-xl border p-3 transition',
+                  isActive ? 'border-brand-500 bg-brand-50' : 'border-border bg-card'
+                )}
+              >
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  {line.speaker && (
+                    <span className="text-[10px] font-semibold text-text-hint">
+                      {line.speaker}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void playLine(li)}
+                    className="ms-auto text-[11px] text-brand-600"
+                  >
+                    🔊
+                  </button>
+                </div>
+
+                <p className="target-text text-sm leading-relaxed text-text" dir="ltr">
+                  {words.map((w, wi) => (
+                    <span
+                      key={`${w}-${wi}`}
+                      className={clsx(
+                        'transition-colors',
+                        isActive && activeWord === wi && 'rounded bg-brand-500/20 font-semibold text-brand-700'
+                      )}
+                    >
+                      {w}{' '}
+                    </span>
+                  ))}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {question && (
+        <Card>
+          <p className="mb-2 text-sm font-semibold leading-relaxed text-text">
+            {question.prompt}
+          </p>
+
+          <ChoiceList
+            options={question.options}
+            correctIndex={question.correctIndex}
+            selected={selected}
+            checked={revealed}
+            onSelect={onSelect}
+            ltr
+            allowDontKnow
+          />
+
+          {revealed && (
+            <div
+              className={clsx(
+                'mt-3 rounded-xl border p-3 text-start',
+                selected === question.correctIndex
+                  ? 'border-success-500/30 bg-success-100/50'
+                  : 'border-danger-500/30 bg-danger-100/50'
+              )}
+            >
+              <p className="text-xs font-semibold text-text">
+                {selected === question.correctIndex
+                  ? t('lesson.correct')
+                  : t('lesson.incorrect')}
+              </p>
+              <p className="target-text mt-1 text-sm text-text" dir="ltr">
+                {question.options[question.correctIndex]}
+              </p>
+            </div>
           )}
         </Card>
       )}

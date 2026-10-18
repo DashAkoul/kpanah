@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, Button, ProgressBar } from '../../components/ui';
 import { Roadmap } from './Roadmap';
@@ -138,6 +138,11 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
     );
   }
 
+  // ── 3.5 درس امروز تمام شده — درس بعدی در نیمه‌شب محلی باز می‌شود ──
+  if (!data.lesson && data.nextUnlockAt) {
+    return <NextUnlockState unlockAt={data.nextUnlockAt} />;
+  }
+
   // ── 4. Cycle finished, next not ready ─────────────────────────────
   if (!data.lesson) {
     return <CycleCompleteState />;
@@ -250,6 +255,42 @@ function GeneratingState({
       <Button variant="secondary" size="sm" onClick={onRefresh}>
         {t('common.retry')}
       </Button>
+    </div>
+  );
+}
+
+/**
+ * «درس امروز تمام شد» — تا نیمه‌شبِ **ساعت خود کاربر** درس بعدی باز نیست.
+ */
+function NextUnlockState({ unlockAt }: { unlockAt: string }) {
+  const { t } = useTranslation();
+  const [left, setLeft] = useState(() => new Date(unlockAt).getTime() - Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setLeft(new Date(unlockAt).getTime() - Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [unlockAt]);
+
+  const total = Math.max(0, left);
+  const hours = Math.floor(total / 3_600_000);
+  const minutes = Math.floor((total % 3_600_000) / 60_000);
+  const seconds = Math.floor((total % 60_000) / 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return (
+    <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
+      <div className="text-5xl">🌙</div>
+      <h2 className="text-lg font-bold text-text">{t('learn.doneForToday')}</h2>
+      <p className="max-w-xs text-sm leading-relaxed text-text-hint">
+        {t('learn.nextLessonAtMidnight')}
+      </p>
+
+      <div className="mt-2 rounded-2xl border border-border bg-card px-6 py-4">
+        <p className="font-mono text-2xl font-bold text-text" dir="ltr">
+          {pad(hours)}:{pad(minutes)}:{pad(seconds)}
+        </p>
+        <p className="mt-1 text-[11px] text-text-hint">{t('learn.untilNextLesson')}</p>
+      </div>
     </div>
   );
 }

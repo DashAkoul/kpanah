@@ -151,7 +151,18 @@ const NUDGE: Record<string, string> = {
   ru: 'Привет, {name} 👋\nПора немного позаниматься.\nУрок на сегодня готов 🚀',
 };
 
-export async function runDailyNudges(env: Env, limit = 300): Promise<{ sent: number }> {
+/**
+ * یادآور روزانه — **به وقت محلی خود کاربر**.
+ *
+ * ⚠️ باگ رفع‌شده: قبلاً کرون `0 9 * * *` (UTC) اجرا می‌شد و کاربر تهران
+ * ساعت ۱۲:۳۰ پیام می‌گرفت. حالا این تابع هر ساعت اجرا می‌شود و فقط برای
+ * کاربرانی پیام می‌فرستد که ساعت محلی‌شان ۹ است.
+ */
+export async function runDailyNudges(
+  env: Env,
+  limit = 300,
+  targetLocalHour = 9
+): Promise<{ sent: number }> {
   if (!env.TELEGRAM_BOT_TOKEN) return { sent: 0 };
 
   const r = repo(env);
@@ -159,6 +170,21 @@ export async function runDailyNudges(env: Env, limit = 300): Promise<{ sent: num
   let sent = 0;
 
   for (const u of users) {
+    // ساعت محلی کاربر — پیش‌فرض UTC اگر ثبت نشده باشد
+    let localHour: number;
+    try {
+      localHour = Number(
+        new Intl.DateTimeFormat('en-US', {
+          timeZone: u.timezone || 'UTC',
+          hour: '2-digit',
+          hour12: false,
+        }).format(new Date())
+      );
+    } catch {
+      localHour = new Date().getUTCHours();
+    }
+    if (localHour !== targetLocalHour) continue;
+
     const lang = u.ui_language ?? 'fa';
     const template = NUDGE[lang] ?? NUDGE.en!;
     const text = template.replace('{name}', u.first_name ?? '');

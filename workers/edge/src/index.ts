@@ -239,8 +239,10 @@ export default {
     try {
       if (cron === '0 * * * *') {
         const res = await runHourlyMaintenance(env);
+        // یادآور روزانه به وقت **محلی هر کاربر** (ساعت ۹)
+        const nudge = await runDailyNudges(env);
         console.log(
-          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}`
+          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}, nudges: ${nudge.sent}`
         );
       } else if (cron === '*/5 * * * *') {
         const res = await runBackgroundGeneration(env);

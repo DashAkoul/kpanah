@@ -27,6 +27,15 @@ export function ProgressPanel() {
   const { t } = useTranslation();
   const { data, isLoading } = useProgress();
 
+  /**
+   * ⚠️ باگ رفع‌شده (صفحهٔ سفید): این `useState` **بعد از** `return` شرطی
+   * پایین بود. رندر اول (loading) صفر هوک صدا می‌زد و رندر دوم (داده)
+   * یکی → React خطای «Rendered more hooks than during the previous render»
+   * می‌داد و کل اپ سفید می‌شد، دقیقاً چند ثانیه بعد از باز شدن.
+   * همهٔ هوک‌ها باید **قبل از** هر return شرطی باشند.
+   */
+  const [listKind, setListKind] = useState<'mastered' | 'learning' | null>(null);
+
   if (isLoading || !data) {
     return (
       <div className="space-y-3">
@@ -38,7 +47,6 @@ export function ProgressPanel() {
   }
 
   const d = data.dashboard;
-  const [listKind, setListKind] = useState<'mastered' | 'learning' | null>(null);
   const words = listKind ? (d.wordLists?.[listKind] ?? []) : [];
 
   return (

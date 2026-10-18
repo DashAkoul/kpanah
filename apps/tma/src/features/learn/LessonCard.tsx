@@ -13,13 +13,16 @@ export function LessonCard({
   dayNumber,
   completedDays,
   totalDays,
+  part1Done,
   onStart,
 }: {
   lesson: Lesson;
   dayNumber: number;
   completedDays: number;
   totalDays: number;
-  onStart: () => void;
+  /** بخش ۱ تمام شده → بخش ۲ (و ۳) باز می‌شود */
+  part1Done: boolean;
+  onStart: (part?: 1 | 2 | 3) => void;
 }) {
   const { t } = useTranslation();
 
@@ -59,18 +62,30 @@ export function LessonCard({
           icon="🧩"
           itemCount={lesson.part1.items.length}
           unlocked
-          onStart={onStart}
-          ctaLabel={t('common.start')}
+          done={part1Done}
+          onStart={() => onStart(1)}
+          ctaLabel={part1Done ? t('common.continue') : t('common.start')}
         />
         <PartRow
           label={t('learn.part2')}
           subtitle={t('learn.subtitleApplication')}
           icon="🌍"
           itemCount={lesson.part2.questions.length}
-          unlocked={false}
-          onStart={onStart}
-          ctaLabel={t('common.locked')}
+          unlocked={part1Done}
+          onStart={() => onStart(2)}
+          ctaLabel={part1Done ? t('common.start') : t('common.locked')}
         />
+        {lesson.part3 && (
+          <PartRow
+            label={t('learn.part3')}
+            subtitle={t('learn.subtitleStory')}
+            icon="📖"
+            itemCount={lesson.part3.lines.length}
+            unlocked={part1Done}
+            onStart={() => onStart(3)}
+            ctaLabel={part1Done ? t('common.start') : t('common.locked')}
+          />
+        )}
       </div>
     </div>
   );
@@ -82,6 +97,7 @@ function PartRow({
   icon,
   itemCount,
   unlocked,
+  done,
   onStart,
   ctaLabel,
 }: {
@@ -90,6 +106,7 @@ function PartRow({
   icon: string;
   itemCount: number;
   unlocked: boolean;
+  done?: boolean;
   onStart: () => void;
   ctaLabel: string;
 }) {
@@ -102,7 +119,9 @@ function PartRow({
       </div>
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-text">{label}</p>
+        <p className="truncate text-sm font-semibold text-text">
+          {label} {done ? '✅' : ''}
+        </p>
         <p className="text-[11px] text-text-hint">
           {subtitle} · {itemCount} {t('common.day') === 'Day' ? 'items' : 'آیتم'}
         </p>

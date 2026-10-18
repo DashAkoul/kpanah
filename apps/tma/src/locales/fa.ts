@@ -50,6 +50,8 @@ export default {
       change: 'تغییر',
     },
     learn: {
+      part3: 'بخش ۳: داستان کوتاه',
+      subtitleStory: 'داستان و درک مطلب',
       firstWaitNote: 'این انتظار فقط بار اول است؛ از درس دوم به بعد، همه‌چیز از قبل آماده است.',
       estimatedWait: 'زمان تقریبی آماده‌سازی',
       doneForToday: 'درس امروز تمام شد ✅',
@@ -107,6 +109,7 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      saving: 'در حال ثبت…',
       part1Done: 'بخش ۱ تمام شد 🎉',
       part2Intro: 'حالا همین واژه‌ها را در یک موقعیت واقعی به کار می‌بریم.',
       startPart2: 'شروع بخش ۲',

@@ -70,8 +70,11 @@ export function LessonPlayer({
   lesson,
   onFinish,
   onExit,
+  submitting = false,
 }: {
   lesson: Lesson;
+  /** در حال ثبت نتیجه — دکمهٔ «انجام شد» باید فوراً بازخورد بدهد */
+  submitting?: boolean;
   onFinish: (answers: {
     itemId: string;
     isCorrect: boolean;
@@ -132,6 +135,22 @@ export function LessonPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progressKey]);
 
+  // شروع از بخشی که کاربر انتخاب کرده (کارت بخش ۲/۳ در صفحهٔ آموزش)
+  useEffect(() => {
+    try {
+      const startPart = localStorage.getItem('kpanah:startPart');
+      if (startPart) {
+        localStorage.removeItem('kpanah:startPart');
+        const p = Number(startPart);
+        if (p === 2) setPart(2);
+        if (p === 3 && lesson.part3) setPart(3);
+      }
+    } catch {
+      /* ignore */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem(
@@ -165,6 +184,12 @@ export function LessonPlayer({
     setRevealed(false);
     setUsedHint(false);
     setShowBoundary(true);
+    // بخش ۱ تمام شد → کارت بخش ۲ در صفحهٔ آموزش باز شود
+    try {
+      localStorage.setItem(`kpanah:part1:${lesson.id}`, '1');
+    } catch {
+      /* ignore */
+    }
   }, [itemIndex, part1Items, session]);
 
   /** ورود واقعی به بخش ۲ */
@@ -417,6 +442,7 @@ export function LessonPlayer({
             isLast={itemIndex + 1 >= part2Questions.length}
             onCheck={checkAnswer}
             onNext={nextQuestion}
+            submitting={submitting}
           />
         )}
       </div>
@@ -769,12 +795,14 @@ function Part2Actions({
   isLast,
   onCheck,
   onNext,
+  submitting = false,
 }: {
   revealed: boolean;
   canCheck: boolean;
   isLast: boolean;
   onCheck: () => void;
   onNext: () => void;
+  submitting?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -787,8 +815,12 @@ function Part2Actions({
   }
 
   return (
-    <Button fullWidth onClick={onNext}>
-      {isLast ? t('common.done') : t('common.next')}
+    <Button fullWidth loading={submitting} onClick={onNext}>
+      {submitting
+        ? t('lesson.saving')
+        : isLast
+          ? t('common.done')
+          : t('common.next')}
     </Button>
   );
 }

@@ -223,11 +223,15 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
           dayNumber={data.lesson.dayNumber}
           completedDays={data.cycle.progress.completedDays}
           totalDays={data.cycle.progress.totalDays}
-          part1Done={(() => {
+          partsDone={(() => {
             try {
-              return Boolean(localStorage.getItem(`kpanah:part1:${data.lesson.id}`));
+              const id = data.lesson.id;
+              if (localStorage.getItem(`kpanah:part3:${id}`)) return 3;
+              if (localStorage.getItem(`kpanah:part2:${id}`)) return 2;
+              if (localStorage.getItem(`kpanah:part1:${id}`)) return 1;
+              return 0;
             } catch {
-              return false;
+              return 0;
             }
           })()}
           onStart={(part) => {
@@ -353,13 +357,15 @@ function WaitTimer({
     return () => clearInterval(id);
   }, []);
 
-  const mm = String(Math.floor(left / 60)).padStart(2, '0');
+  // ⚠️ ساعت:دقیقه:ثانیه — قبلاً دقیقه:ثانیه بود و «۱۳۵۴:۴۱» عجیب دیده می‌شد
+  const hh = String(Math.floor(left / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((left % 3600) / 60)).padStart(2, '0');
   const ss = String(left % 60).padStart(2, '0');
 
   return (
     <div className="rounded-xl border border-border bg-[var(--surface-sunken)] px-4 py-2">
       <p className="font-mono text-lg font-bold text-text" dir="ltr">
-        {mm}:{ss}
+        {hh}:{mm}:{ss}
       </p>
       <p className="text-[10px] text-text-hint">{label}</p>
     </div>

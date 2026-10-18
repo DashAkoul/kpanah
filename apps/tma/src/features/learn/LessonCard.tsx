@@ -13,15 +13,15 @@ export function LessonCard({
   dayNumber,
   completedDays,
   totalDays,
-  part1Done,
+  partsDone,
   onStart,
 }: {
   lesson: Lesson;
   dayNumber: number;
   completedDays: number;
   totalDays: number;
-  /** بخش ۱ تمام شده → بخش ۲ (و ۳) باز می‌شود */
-  part1Done: boolean;
+  /** بالاترین بخشِ تمام‌شده: ۰ = هیچ، ۱ = بخش ۱، ۲ = بخش ۲ */
+  partsDone: number;
   onStart: (part?: 1 | 2 | 3) => void;
 }) {
   const { t } = useTranslation();
@@ -62,18 +62,19 @@ export function LessonCard({
           icon="🧩"
           itemCount={lesson.part1.items.length}
           unlocked
-          done={part1Done}
+          done={partsDone >= 1}
           onStart={() => onStart(1)}
-          ctaLabel={part1Done ? t('common.continue') : t('common.start')}
+          ctaLabel={partsDone >= 1 ? t('common.continue') : t('common.start')}
         />
         <PartRow
           label={t('learn.part2')}
           subtitle={t('learn.subtitleApplication')}
           icon="🌍"
           itemCount={lesson.part2.questions.length}
-          unlocked={part1Done}
+          unlocked={partsDone >= 1}
+          done={partsDone >= 2}
           onStart={() => onStart(2)}
-          ctaLabel={part1Done ? t('common.start') : t('common.locked')}
+          ctaLabel={partsDone >= 1 ? t('common.start') : t('common.locked')}
         />
         {lesson.part3 && (
           <PartRow
@@ -81,9 +82,10 @@ export function LessonCard({
             subtitle={t('learn.subtitleStory')}
             icon="📖"
             itemCount={lesson.part3.lines.length}
-            unlocked={part1Done}
+            unlocked={partsDone >= 2}
+            done={partsDone >= 3}
             onStart={() => onStart(3)}
-            ctaLabel={part1Done ? t('common.start') : t('common.locked')}
+            ctaLabel={partsDone >= 2 ? t('common.start') : t('common.locked')}
           />
         )}
       </div>

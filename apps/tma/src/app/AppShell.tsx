@@ -142,6 +142,16 @@ export function AppShell() {
         lesson={homeData.lesson}
         onExit={() => setScreen('tabs')}
         submitting={completeLesson.isPending}
+        onPartComplete={(part) => {
+          // بخش تمام شد → تیک سبز + باز شدن بخش بعد در صفحهٔ آموزش
+          try {
+            localStorage.setItem(`kpanah:part${part}:${homeData.lesson!.id}`, '1');
+          } catch {
+            /* ignore */
+          }
+          setScreen('tabs');
+          void refetchHome();
+        }}
         onFinish={(answers) => {
           // سقف ۲۴ ساعت — اسکیمای سرور بیشتر از این را رد می‌کند
           const durationSeconds = Math.min(

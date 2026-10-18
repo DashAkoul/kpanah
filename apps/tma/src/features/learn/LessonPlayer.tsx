@@ -143,8 +143,14 @@ export function LessonPlayer({
       if (startPart) {
         localStorage.removeItem('kpanah:startPart');
         const p = Number(startPart);
-        if (p === 2) setPart(2);
-        if (p === 3 && lesson.part3) setPart(3);
+        if (p === 2 || (p === 3 && lesson.part3)) {
+          setPart(p as 2 | 3);
+          setItemIndex(0);
+          setSelected(null);
+          setRevealed(false);
+          setP1Checked(false);
+          setP1Selected(null);
+        }
       }
     } catch {
       /* ignore */

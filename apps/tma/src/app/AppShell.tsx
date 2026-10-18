@@ -141,6 +141,7 @@ export function AppShell() {
       <LessonPlayer
         lesson={homeData.lesson}
         onExit={() => setScreen('tabs')}
+        submitting={completeLesson.isPending}
         onFinish={(answers) => {
           // سقف ۲۴ ساعت — اسکیمای سرور بیشتر از این را رد می‌کند
           const durationSeconds = Math.min(

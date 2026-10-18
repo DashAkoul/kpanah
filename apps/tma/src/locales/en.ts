@@ -50,6 +50,8 @@ export default {
       change: 'Change',
     },
     learn: {
+      part3: 'Part 3: short story',
+      subtitleStory: 'Story and comprehension',
       firstWaitNote: 'This wait only happens once — from lesson two on, everything is ready in advance.',
       estimatedWait: 'Estimated preparation time',
       doneForToday: 'Today\'s lesson is done ✅',
@@ -107,6 +109,7 @@ export default {
       finishedBody: '{{correct}} of {{total}} correct.',
     },
     lesson: {
+      saving: 'Saving…',
       part1Done: 'Part 1 complete 🎉',
       part2Intro: 'Now we use these words in a real situation.',
       startPart2: 'Start part 2',

@@ -1893,13 +1893,13 @@ async function ensureLessonContent(
   // هم‌ترازی با کش سطح واژه قبل از ذخیره → محتوای کش‌شده هم ثابت است
   const aligned = await alignTermCards(r, input, res.lesson);
 
-  // ⚠️ اگر مدل بخش ۳ را نداد، نسخهٔ محلی بساز تا UI هرگز خالی نماند
-  const withStory = aligned.part3
-    ? aligned
-    : { ...aligned, part3: synthesizeStory(aligned, input.user.uiLanguage) ?? undefined };
-
-  await r.putCachedContent('LESSON', key, input.user.targetLanguage, withStory);
-  return withStory;
+  /**
+   * ⚠️ نسخهٔ محلی بخش ۳ (چسباندن جمله‌های مثال) **غیرفعال شد**: جملات
+   * به هم ربط نداشتند و تجربهٔ بدی می‌دادند. تا وقتی فراخوانی اختصاصی
+   * داستان اضافه نشود، اگر مدل `part3` نداد، بخش ۳ نمایش داده نمی‌شود.
+   */
+  await r.putCachedContent('LESSON', key, input.user.targetLanguage, aligned);
+  return aligned;
 }
 
 /** تولید و ذخیرهٔ یک روز مشخص (استفاده در job پس‌زمینه) */

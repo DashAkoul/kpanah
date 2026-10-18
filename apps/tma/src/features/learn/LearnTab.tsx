@@ -138,8 +138,14 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
     );
   }
 
-  // ── 4. Cycle finished, next not ready ─────────────────────────────
-  if (!data.lesson) {
+  /**
+   * ⚠️ باگ رفع‌شده: این صفحه هر بار که `lesson` null بود نشان داده می‌شد —
+   * حتی وقتی چرخه فقط ۲ روز از ۷ روز پیش رفته بود. حالا فقط وقتی چرخه
+   * **واقعاً کامل** شده (۷ از ۷) این صفحه می‌آید.
+   */
+  const completedDays = data.cycle.progress.completedDays;
+  const totalDays = data.cycle.progress.totalDays;
+  if (!data.lesson && completedDays >= totalDays) {
     return <CycleCompleteState />;
   }
 
@@ -199,7 +205,7 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
         </p>
         <Roadmap
           days={
-            data.nextUnlockAt
+            !data.lesson
               ? data.cycle.days.map((d) =>
                   d.status === 'AVAILABLE'
                     ? { ...d, status: 'LOCKED' as const, isActive: false, isLocked: true }
@@ -217,23 +223,35 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
           dayNumber={data.lesson.dayNumber}
           completedDays={data.cycle.progress.completedDays}
           totalDays={data.cycle.progress.totalDays}
-          onStart={onStartLesson}
+          part1Done={(() => {
+            try {
+              return Boolean(localStorage.getItem(`kpanah:part1:${data.lesson.id}`));
+            } catch {
+              return false;
+            }
+          })()}
+          onStart={(part) => {
+            // بخش انتخاب‌شده را به پلیر منتقل کن
+            try {
+              localStorage.setItem('kpanah:startPart', String(part ?? 1));
+            } catch {
+              /* ignore */
+            }
+            onStartLesson();
+          }}
         />
-      ) : data.nextUnlockAt ? (
+      ) : (
         <Card>
           <div className="flex flex-col items-center gap-2 py-3 text-center">
             <p className="text-sm font-semibold text-text">🌙 {t('learn.doneForToday')}</p>
             <p className="text-xs text-text-hint">{t('learn.nextLessonAtMidnight')}</p>
             <WaitTimer
-              minutes={Math.max(
-                1,
-                Math.round((new Date(data.nextUnlockAt).getTime() - Date.now()) / 60_000)
-              )}
+              minutes={minutesUntilLocalMidnight(data.nextUnlockAt)}
               label={t('learn.untilNextLesson')}
             />
           </div>
         </Card>
-      ) : null}
+      )}
 
       {/* Streak nudge */}
       {user && user.streakCount > 0 && (
@@ -346,6 +364,23 @@ function WaitTimer({
       <p className="text-[10px] text-text-hint">{label}</p>
     </div>
   );
+}
+
+/**
+ * دقیقه تا باز شدن درس بعدی.
+ * اگر سرور `nextUnlockAt` داده باشد همان، وگرنه نیمه‌شب محلی بعدی.
+ * ⚠️ fallback لازم است: کلاینتی که پاسخ قدیمی/ناقص گرفته هم باید شمارش
+ * درست نشان دهد، نه صفحهٔ «برنامه قفل شد».
+ */
+function minutesUntilLocalMidnight(iso?: string | null): number {
+  if (iso) {
+    const ms = new Date(iso).getTime() - Date.now();
+    if (Number.isFinite(ms) && ms > 0) return Math.max(1, Math.round(ms / 60_000));
+  }
+  const now = new Date();
+  const midnight = new Date(now);
+  midnight.setHours(24, 0, 0, 0);
+  return Math.max(1, Math.round((midnight.getTime() - now.getTime()) / 60_000));
 }
 
 /**

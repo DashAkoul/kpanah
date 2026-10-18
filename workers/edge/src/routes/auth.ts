@@ -189,7 +189,15 @@ async function issueSession(
     SECURITY.jwtTtlSeconds
   );
 
+  /**
+   * ⚠️ ترجیحات (دقایق روزانه/گویش) در `app_settings` است، نه در جدول users.
+   * بدون این، پاسخ `auth` مقدار `dailyMinutes: null` می‌داد و در تنظیمات
+   * **هیچ گزینه‌ای انتخاب‌شده دیده نمی‌شد**.
+   */
+  const prefs = await repo.getUserPrefs(user.id);
   const profile = toUserProfile(user, subscription, { isAdmin, adminRole });
+  profile.dailyMinutes = prefs.dailyMinutes;
+  profile.dialect = prefs.dialect;
 
   return jsonSuccess({ token, user: profile }, requestId, env);
 }

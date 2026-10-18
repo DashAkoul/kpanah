@@ -146,6 +146,13 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   // ── 4. Active lesson ──────────────────────────────────────────────
   const dueItems = due.data?.items ?? [];
 
+  // درس آماده شد → مارکر تایمر تولید پاک شود
+  try {
+    localStorage.removeItem('kpanah:genStartedAt');
+  } catch {
+    /* ignore */
+  }
+
   return (
     <div className="space-y-4 p-4">
       {/* مرور آزاد — واژه‌هایی که فاصلهٔ لایتنرشان سر رسیده */}
@@ -275,7 +282,11 @@ function GeneratingState({
 
       {generating ? (
         <>
-          <WaitTimer minutes={15} label={t('learn.estimatedWait')} />
+          <WaitTimer
+            minutes={15}
+            label={t('learn.estimatedWait')}
+            persistKey="kpanah:genStartedAt"
+          />
           <p className="max-w-[260px] text-[11px] leading-relaxed text-text-muted">
             {t('learn.firstWaitNote')}
           </p>
@@ -293,8 +304,31 @@ function GeneratingState({
  * تایمر نمایشی (نه منطقی): فقط برای این‌که انتظار «قابل‌درک» باشد.
  * ⚠️ به‌محض آماده شدن محتوا، کل این صفحه با محتوای واقعی جایگزین می‌شود.
  */
-function WaitTimer({ minutes, label }: { minutes: number; label: string }) {
-  const [left, setLeft] = useState(minutes * 60);
+function WaitTimer({
+  minutes,
+  label,
+  persistKey,
+}: {
+  minutes: number;
+  label: string;
+  /** اگر داده شود، شمارش با رفرش/تغییر صفحه از صفر شروع نمی‌شود */
+  persistKey?: string;
+}) {
+  const [left, setLeft] = useState(() => {
+    if (!persistKey) return minutes * 60;
+    try {
+      const raw = localStorage.getItem(persistKey);
+      let started = raw ? Number(raw) : NaN;
+      if (!Number.isFinite(started) || started <= 0) {
+        started = Date.now();
+        localStorage.setItem(persistKey, String(started));
+      }
+      const endAt = started + minutes * 60_000;
+      return Math.max(0, Math.round((endAt - Date.now()) / 1000));
+    } catch {
+      return minutes * 60;
+    }
+  });
 
   useEffect(() => {
     const id = setInterval(() => setLeft((v) => (v > 0 ? v - 1 : 0)), 1000);

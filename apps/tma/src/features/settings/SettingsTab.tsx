@@ -97,6 +97,17 @@ export function SettingsTab() {
     }
   };
 
+  /** تغییر بودجهٔ زمانی روزانه — در چرخهٔ **بعدی** اعمال می‌شود */
+  const changeDailyMinutes = async (minutes: number) => {
+    try {
+      haptic('select');
+      await updateProfile.mutateAsync({ dailyMinutes: minutes });
+      showToast(t('settings.dailyMinutesSaved'), 'success');
+    } catch {
+      showToast(t('errors.server_error'), 'error');
+    }
+  };
+
   const changeGoal = async (goal: string) => {
     haptic('select');
     try {
@@ -208,6 +219,31 @@ export function SettingsTab() {
               )}
             >
               {goal.icon} {goal.labelFa}
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      {/* Daily time budget */}
+      <Card>
+        <p className="mb-1 text-xs font-semibold text-text">{t('settings.dailyMinutes')}</p>
+        <p className="mb-2.5 text-[11px] leading-relaxed text-text-hint">
+          {t('settings.dailyMinutesHint')}
+        </p>
+        <div className="grid grid-cols-5 gap-2">
+          {[5, 10, 15, 20, 30].map((minutes) => (
+            <button
+              key={minutes}
+              type="button"
+              onClick={() => void changeDailyMinutes(minutes)}
+              className={clsx(
+                'rounded-xl border py-2 text-center text-xs transition active:scale-[0.98]',
+                (user.dailyMinutes ?? 15) === minutes
+                  ? 'border-accent bg-accent-soft font-semibold text-accent'
+                  : 'border-border bg-card text-text'
+              )}
+            >
+              {minutes}′
             </button>
           ))}
         </div>

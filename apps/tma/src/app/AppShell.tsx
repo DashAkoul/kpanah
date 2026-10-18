@@ -40,8 +40,30 @@ type Screen = 'tabs' | 'lesson' | 'result';
 export function AppShell() {
   const { t } = useTranslation();
   const showToast = useUiStore((s) => s.showToast);
+
   const status = useSessionStore((s) => s.status);
   const user = useSessionStore((s) => s.user);
+
+  /**
+   * منطقهٔ زمانی کاربر را یک‌بار به سرور بفرست تا اعلان‌ها و باز شدن
+   * درس روز بعد بر اساس **ساعت خودش** باشد، نه ساعت سرور.
+   */
+  useEffect(() => {
+    if (status !== 'authenticated') return;
+    let tz = 'UTC';
+    try {
+      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return;
+    }
+    if (!tz || localStorage.getItem('kpanah:tz') === tz) return;
+    void import('../lib/api').then(({ api }) =>
+      api
+        .updateProfile({ timezone: tz })
+        .then(() => localStorage.setItem('kpanah:tz', tz))
+        .catch(() => undefined)
+    );
+  }, [status]);
   const authError = useSessionStore((s) => s.error);
 
   const [tab, setTab] = useState<TabKey>('learn');

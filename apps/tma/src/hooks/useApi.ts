@@ -69,6 +69,8 @@ export interface HomeData {
   lesson: Lesson | null;
   generating: boolean;
   generationStatus: string | null;
+  /** اگر درس امروز تمام شده، زمان باز شدن درس بعدی (ISO) */
+  nextUnlockAt?: string | null;
   /** دلیل خطا وقتی تولید چرخه شکست خورده (فقط برای FAILED) */
   generationError?: string | null;
 }

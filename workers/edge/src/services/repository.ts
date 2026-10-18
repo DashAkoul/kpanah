@@ -138,6 +138,8 @@ export interface PlanUpsertInput {
 interface LexicalRow {
   term: string;
   box: number;
+  meaning_fa?: string | null;
+  next_review_at?: string | null;
   ease: number;
   lapses: number;
   repetitions: number;
@@ -462,14 +464,22 @@ export class ContentRepository {
   /** کاربران فعال برای یادآور روزانه (اشتراک/دورهٔ آزمایشی معتبر) */
   async listReminderTargets(
     limit = 500
-  ): Promise<{ telegram_id: number; first_name: string | null; ui_language: string | null }[]> {
+  ): Promise<
+    {
+      telegram_id: number;
+      first_name: string | null;
+      ui_language: string | null;
+      timezone: string | null;
+    }[]
+  > {
     try {
       const rows = await this.db.select<{
         telegram_id: number;
         first_name: string | null;
         ui_language: string | null;
+        timezone: string | null;
       }>('users', {
-        select: 'telegram_id,first_name,ui_language',
+        select: 'telegram_id,first_name,ui_language,timezone',
         is_blocked: 'eq.false',
         order: 'created_at.desc',
         limit: String(limit),
@@ -645,7 +655,12 @@ export class ContentRepository {
         title_fa: lesson.titleFa,
         kind: lesson.kind,
         part_1_data: lesson.part1 as unknown as Record<string, unknown>,
-        part_2_data: lesson.part2 as unknown as Record<string, unknown>,
+        // ⚠️ جدول `lessons` ستون `part_3_data` ندارد؛ بخش ۳ (داستان) داخل
+        // `part_2_data.story` ذخیره می‌شود و در `toLessonDto` جدا می‌شود.
+        part_2_data: {
+          ...(lesson.part2 as unknown as Record<string, unknown>),
+          story: lesson.part3 ?? null,
+        },
         status,
       }
     );
@@ -910,6 +925,96 @@ export class ContentRepository {
         order: 'next_review_at.asc',
         limit: String(limit),
         select: '*',
+      });
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * ترجیحات کاربر (دقایق روزانه، گویش) — در `app_settings` به‌صورت
+   * کلید-مقدار ذخیره می‌شود چون جدول `users` ستون `daily_minutes` ندارد.
+   */
+  async getUserPrefs(userId: string): Promise<{
+    dailyMinutes: number | null;
+    dialect: string | null;
+  }> {
+    try {
+      const rows = await this.db.select<{ value: Record<string, unknown> }>('app_settings', {
+        key: `eq.user:${userId}:prefs`,
+        select: 'value',
+        limit: '1',
+      });
+      const v = asRows(rows)[0]?.value ?? {};
+      return {
+        dailyMinutes:
+          typeof v.dailyMinutes === 'number' && Number.isFinite(v.dailyMinutes)
+            ? v.dailyMinutes
+            : null,
+        dialect: typeof v.dialect === 'string' ? v.dialect : null,
+      };
+    } catch {
+      return { dailyMinutes: null, dialect: null };
+    }
+  }
+
+  async saveUserPrefs(
+    userId: string,
+    patch: { dailyMinutes?: number | null; dialect?: string | null }
+  ): Promise<void> {
+    const current = await this.getUserPrefs(userId);
+    const value = {
+      dailyMinutes: patch.dailyMinutes ?? current.dailyMinutes,
+      dialect: patch.dialect ?? current.dialect,
+    };
+    await this.db
+      .insert(
+        'app_settings',
+        { key: `user:${userId}:prefs`, value, description: 'user preferences' },
+        { upsertOn: 'key' }
+      )
+      .catch(() => undefined);
+  }
+
+  /** همهٔ رویدادهای تلمتری کاربر از یک زمان به بعد (همهٔ چرخه‌ها) */
+  async getTelemetryForUserSince(
+    userId: string,
+    sinceIso: string,
+    limit = 5000
+  ): Promise<{ event_type: string; is_correct: boolean | null; response_ms: number | null; pause_ms: number | null }[]> {
+    try {
+      const rows = await this.db.select<{
+        event_type: string;
+        is_correct: boolean | null;
+        response_ms: number | null;
+        pause_ms: number | null;
+      }>('telemetry_events', {
+        user_id: `eq.${userId}`,
+        created_at: `gte.${sinceIso}`,
+        select: 'event_type,is_correct,response_ms,pause_ms',
+        limit: String(limit),
+      });
+      return asRows(rows);
+    } catch {
+      return [];
+    }
+  }
+
+  /** دروس تکمیل‌شدهٔ کاربر (برای دقایق و فعالیت هفتگی) */
+  async listCompletedLessons(
+    userId: string
+  ): Promise<{ day_number: number; duration_seconds: number | null; completed_at: string | null }[]> {
+    try {
+      const rows = await this.db.select<{
+        day_number: number;
+        duration_seconds: number | null;
+        completed_at: string | null;
+      }>('lessons', {
+        user_id: `eq.${userId}`,
+        is_completed: 'eq.true',
+        select: 'day_number,duration_seconds,completed_at',
+        limit: '2000',
       });
       return asRows(rows);
     } catch {
@@ -2189,6 +2294,10 @@ export function toLessonDto(row: LessonRow): Lesson {
   // و بازتولید شود) ولی نباید به کلاینت برود.
   const part1 = { ...(row.part_1_data as Record<string, unknown>) };
   delete part1._cv;
+
+  const part2 = { ...(row.part_2_data as Record<string, unknown>) };
+  const story = part2.story as Lesson['part3'] | null | undefined;
+  delete part2.story;
   return {
     id: row.id,
     cycleId: row.cycle_id,
@@ -2197,7 +2306,8 @@ export function toLessonDto(row: LessonRow): Lesson {
     titleFa: row.title_fa,
     kind: row.kind,
     part1: part1 as unknown as Lesson['part1'],
-    part2: row.part_2_data as Lesson['part2'],
+    part2: part2 as unknown as Lesson['part2'],
+    ...(story ? { part3: story } : {}),
     status: row.status as Lesson['status'],
     isCompleted: row.is_completed,
     durationSeconds: row.duration_seconds,
@@ -2214,6 +2324,8 @@ export function buildProgressDashboard(input: {
   lexical: LexicalRow[];
   streakCount: number;
   weeklyMinutes: number[];
+  /** مجموع دقایق یادگیری (از duration_seconds دروس تکمیل‌شده) */
+  totalMinutes?: number;
 }): ProgressDashboard {
   const answers = input.telemetry.filter((t) => t.event_type === 'ANSWER');
   const correct = answers.filter((a) => a.is_correct === true).length;
@@ -2232,7 +2344,7 @@ export function buildProgressDashboard(input: {
   return {
     accuracyPct,
     lessonsCompleted: input.lessonsCompleted,
-    totalMinutes: Math.round(totalPauseMs / 60_000),
+    totalMinutes: input.totalMinutes ?? Math.round(totalPauseMs / 60_000),
     masteredWords,
     learningWords,
     streakCount: input.streakCount,

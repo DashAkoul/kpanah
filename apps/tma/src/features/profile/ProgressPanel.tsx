@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   BarChart,
@@ -10,6 +11,8 @@ import {
 } from 'recharts';
 import type { QualitativeSkill } from '@kpanah/shared';
 import { Card, Chip, ProgressBar, Skeleton } from '../../components/ui';
+import { Portal } from '../../components/Portal';
+import type { WordListEntry } from '@kpanah/shared';
 import { useProgress } from '../../hooks/useApi';
 import { useSessionStore } from '../../store/session';
 
@@ -35,6 +38,8 @@ export function ProgressPanel() {
   }
 
   const d = data.dashboard;
+  const [listKind, setListKind] = useState<'mastered' | 'learning' | null>(null);
+  const words = listKind ? (d.wordLists?.[listKind] ?? []) : [];
 
   return (
     <div className="space-y-3">
@@ -55,11 +60,13 @@ export function ProgressPanel() {
           value={d.masteredWords}
           icon="🎯"
           tone="success"
+          onClick={() => setListKind('mastered')}
         />
         <StatBox
           label={t('profile.learningWords')}
           value={d.learningWords}
           icon="📖"
+          onClick={() => setListKind('learning')}
         />
       </div>
 
@@ -70,7 +77,11 @@ export function ProgressPanel() {
 
         <div className="space-y-2">
           {d.qualitativeSkills.map((skill) => (
-            <SkillRow key={skill.key} skill={skill} />
+            <SkillRow
+              key={skill.key}
+              skill={skill}
+              progress={d.skillProgress?.find((p) => p.key === skill.key)}
+            />
           ))}
         </div>
       </Card>
@@ -146,7 +157,100 @@ export function ProgressPanel() {
           </div>
         </div>
       </Card>
+
+      {listKind && (
+        <WordListModal
+          kind={listKind}
+          words={words}
+          onClose={() => setListKind(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * پاپ‌آپ لیست واژه‌ها — «تثبیت‌شده» یا «در حال یادگیری» با موقعیت مرور.
+ * ⚠️ از Portal استفاده می‌کند تا `fixed` نسبت به کارت‌های دارای
+ * backdrop-filter محاسبه نشود.
+ */
+function WordListModal({
+  kind,
+  words,
+  onClose,
+}: {
+  kind: 'mastered' | 'learning';
+  words: WordListEntry[];
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+
+  const due = (iso: string | null) => {
+    if (!iso) return '—';
+    const diff = Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+    if (!Number.isFinite(diff)) return '—';
+    if (diff <= 0) return t('profile.dueToday');
+    if (diff === 1) return t('profile.dueTomorrow');
+    return t('profile.dueInDays', { count: diff });
+  };
+
+  return (
+    <Portal>
+      <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4">
+        <div className="flex max-h-[85dvh] w-full max-w-md flex-col rounded-t-2xl bg-bg sm:rounded-2xl">
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+            <p className="text-sm font-semibold text-text">
+              {kind === 'mastered' ? t('profile.wordsMasteredTitle') : t('profile.wordsLearningTitle')}
+              <span className="ms-1 text-xs font-normal text-text-hint">({words.length})</span>
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-sm text-text-hint transition active:scale-95"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
+            {words.length === 0 ? (
+              <p className="py-8 text-center text-xs text-text-hint">{t('profile.noWords')}</p>
+            ) : (
+              <ul className="space-y-2">
+                {words.map((w) => (
+                  <li
+                    key={w.term}
+                    className="flex items-center gap-3 rounded-xl border border-border bg-card p-2.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="target-text truncate text-sm font-semibold text-text" dir="ltr">
+                        {w.term}
+                      </p>
+                      {w.meaning && (
+                        <p className="truncate text-[11px] text-text-hint">{w.meaning}</p>
+                      )}
+                    </div>
+
+                    <div className="shrink-0 text-end">
+                      <span
+                        className={
+                          w.box >= 5
+                            ? 'rounded-full bg-success-100 px-2 py-0.5 text-[10px] font-semibold text-success-500'
+                            : 'rounded-full bg-[var(--surface-sunken)] px-2 py-0.5 text-[10px] font-semibold text-text-hint'
+                        }
+                      >
+                        {t('profile.boxOf', { box: w.box })}
+                      </span>
+                      <p className="mt-1 text-[10px] text-text-muted">{due(w.nextReviewAt)}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+    </Portal>
   );
 }
 
@@ -155,13 +259,15 @@ function StatBox({
   value,
   icon,
   tone = 'neutral',
+  onClick,
 }: {
   label: string;
   value: number;
   icon: string;
   tone?: 'neutral' | 'success';
+  onClick?: () => void;
 }) {
-  return (
+  const inner = (
     <Card className="flex items-center gap-3">
       <span className="text-xl">{icon}</span>
       <div className="min-w-0">
@@ -178,9 +284,23 @@ function StatBox({
       </div>
     </Card>
   );
+
+  // ⚠️ Card خودش onClick نمی‌گیرد؛ برای کلیک‌پذیری داخل button می‌گذاریم.
+  if (!onClick) return inner;
+  return (
+    <button type="button" onClick={onClick} className="text-start transition active:scale-[0.98]">
+      {inner}
+    </button>
+  );
 }
 
-function SkillRow({ skill }: { skill: QualitativeSkill }) {
+function SkillRow({
+  skill,
+  progress,
+}: {
+  skill: QualitativeSkill;
+  progress?: { current: number; target: number };
+}) {
   const { t } = useTranslation();
 
   return (
@@ -198,7 +318,10 @@ function SkillRow({ skill }: { skill: QualitativeSkill }) {
       {skill.unlocked ? (
         <Chip tone="success">✓</Chip>
       ) : (
-        <span className="text-xs text-text-muted">🔒</span>
+        <span className="shrink-0 text-[10px] text-text-muted">
+          {progress ? `${Math.min(progress.current, progress.target)}/${progress.target} ` : ''}
+          🔒
+        </span>
       )}
     </div>
   );

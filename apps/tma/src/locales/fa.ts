@@ -134,7 +134,14 @@ export default {
       audioFailed: 'پخش نشد — دوباره بزن',
       listenAgain: 'دوباره بشنو',
     },
-    profile: {
+    profile: {      wordsMasteredTitle: 'واژه‌های تثبیت‌شده',
+      wordsLearningTitle: 'واژه‌های در حال یادگیری',
+      boxOf: 'جعبهٔ {{box}}/۵',
+      dueToday: 'مرور: امروز',
+      dueTomorrow: 'مرور: فردا',
+      dueInDays: 'مرور: {{count}} روز دیگر',
+      noWords: 'هنوز واژه‌ای اینجا نیست',
+
       title: 'پروفایل من',
       stats: 'آمار کلی',
       store: 'فروشگاه',

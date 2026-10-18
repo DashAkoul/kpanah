@@ -134,7 +134,14 @@ export default {
       audioFailed: 'Playback failed — tap again',
       listenAgain: 'Listen again',
     },
-    profile: {
+    profile: {      wordsMasteredTitle: 'Mastered words',
+      wordsLearningTitle: 'Words in progress',
+      boxOf: 'Box {{box}}/5',
+      dueToday: 'Review: today',
+      dueTomorrow: 'Review: tomorrow',
+      dueInDays: 'Review: in {{count}} days',
+      noWords: 'No words here yet',
+
       title: 'My profile',
       stats: 'Overall stats',
       store: 'Store',

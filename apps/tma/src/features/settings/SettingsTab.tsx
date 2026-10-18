@@ -59,6 +59,15 @@ function setReminderTimePref(v: string): void {
  * and the account-deletion ("right to be forgotten") action required
  * by the spec: one click removes all data.
  */
+/** همان گزینه‌های سؤال onboarding — نه اعداد دلخواه */
+const DAILY_MINUTE_OPTIONS = [
+  { minutes: 10, label: '<15' },
+  { minutes: 20, label: '15-30' },
+  { minutes: 35, label: '30-45' },
+  { minutes: 50, label: '45-60' },
+  { minutes: 75, label: '>60' },
+] as const;
+
 export function SettingsTab() {
   const { t } = useTranslation();
   const user = useSessionStore((s) => s.user);
@@ -231,19 +240,19 @@ export function SettingsTab() {
           {t('settings.dailyMinutesHint')}
         </p>
         <div className="grid grid-cols-5 gap-2">
-          {[5, 10, 15, 20, 30].map((minutes) => (
+          {DAILY_MINUTE_OPTIONS.map((opt) => (
             <button
-              key={minutes}
+              key={opt.minutes}
               type="button"
-              onClick={() => void changeDailyMinutes(minutes)}
+              onClick={() => void changeDailyMinutes(opt.minutes)}
               className={clsx(
-                'rounded-xl border py-2 text-center text-xs transition active:scale-[0.98]',
-                (user.dailyMinutes ?? 15) === minutes
+                'rounded-xl border py-2 text-center text-[11px] transition active:scale-[0.98]',
+                (user.dailyMinutes ?? 15) === opt.minutes
                   ? 'border-accent bg-accent-soft font-semibold text-accent'
                   : 'border-border bg-card text-text'
               )}
             >
-              {minutes}′
+              {opt.label}
             </button>
           ))}
         </div>

@@ -101,6 +101,11 @@ export function LessonPlayer({
 
   // ── Part 1 state ──────────────────────────────────────────────────
   const [p1Step, setP1Step] = useState<P1Step>(() => firstStep(part1Items[0]));
+  /**
+   * مرز بین بخش‌ها — بخش ۱ و ۲ (و ۳) **جدا** هستند و کاربر خودش «ادامه»
+   * را می‌زند؛ قبلاً به‌صورت خودکار وارد بخش بعد می‌شد.
+   */
+  const [showBoundary, setShowBoundary] = useState(false);
   const [p1Selected, setP1Selected] = useState<number | null>(null);
   const [p1Checked, setP1Checked] = useState(false);
 
@@ -155,16 +160,23 @@ export function LessonPlayer({
       session.markItemStart();
       return;
     }
-    setPart(2);
-    setItemIndex(0);
-    setSelected(null);
     // ⚠️ باگ رفع‌شده: `revealed` ریست نمی‌شد؛ اولین سؤال بخش ۲ با
     // revealed=true رندر می‌شد و جواب درست از قبل سبز دیده می‌شد.
     setRevealed(false);
     setUsedHint(false);
+    setShowBoundary(true);
+  }, [itemIndex, part1Items, session]);
+
+  /** ورود واقعی به بخش ۲ */
+  const startPart2 = useCallback(() => {
+    setShowBoundary(false);
+    setPart(2);
+    setItemIndex(0);
+    setSelected(null);
+    setRevealed(false);
     session.setPart(2);
     session.markItemStart();
-  }, [itemIndex, part1Items, session]);
+  }, [session]);
 
   /** بررسی پاسخ بخش ۱ و ثبت آن در آمار */
   const checkP1 = useCallback(() => {
@@ -285,7 +297,19 @@ export function LessonPlayer({
 
       {/* Body */}
       <div className="flex-1 px-4 py-5">
-        {part === 1 && currentItem && (
+        {showBoundary && (
+          <div className="flex flex-col items-center gap-4 py-16 text-center">
+            <div className="text-4xl">✅</div>
+            <h2 className="text-base font-bold text-text">{t('lesson.part1Done')}</h2>
+            <p className="max-w-xs text-sm leading-relaxed text-text-hint">
+              {t('lesson.part2Intro')}
+            </p>
+            <Button className="mt-2 w-full" onClick={startPart2}>
+              {t('lesson.startPart2')}
+            </Button>
+          </div>
+        )}
+        {!showBoundary && part === 1 && currentItem && (
           <PatternItemView
             item={currentItem}
             step={p1Step}
@@ -335,7 +359,7 @@ export function LessonPlayer({
 
       {/* Footer actions */}
       <div className="safe-bottom sticky bottom-0 border-t border-border bg-bg/95 px-4 py-3 backdrop-blur">
-        {part === 1 && currentItem && (
+        {!showBoundary && part === 1 && currentItem && (
           <Part1Actions
             step={p1Step}
             hasChoice={Boolean(

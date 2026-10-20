@@ -282,12 +282,16 @@ export async function handleHome(
   const partsDone =
     current && currentReady ? await r.getLessonParts(user.id, current.id) : 0;
 
+  const economy = await r.getEconomySettings();
+
   return jsonSuccess(
     {
       user: profile,
       cycle: cycleDto,
       lesson: currentReady ? toLessonDto(current!) : null,
       partsDone,
+      coinValueIrr:
+        typeof economy.coinValueIrr === 'number' ? economy.coinValueIrr : null,
       generating: Boolean(current) && !currentReady,
       generationStatus: Boolean(current) && !currentReady ? 'GENERATING' : null,
     },
@@ -729,6 +733,40 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=set-coin-rate  (فقط مدیر)
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * مدیر تعیین می‌کند هر «سکه» چه ارزشی دارد (ریال). این مقدار پایهٔ آیندهٔ
+ * تبدیل سکه به استارز/TON است و فعلاً فقط نمایش داده می‌شود.
+ */
+export async function handleSetCoinRate(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId, telegramId } = context;
+  if (!telegramId) return jsonError('UNAUTHORIZED', 'No identity', requestId, env, 401);
+
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const admin = isAdminFromEnv(env, telegramId) || Boolean(user.is_admin);
+  if (!admin) return jsonError('UNAUTHORIZED', 'admin only', requestId, env, 403);
+
+  const body = (await readJson(request)) as { coinValueIrr?: unknown };
+  const value = Number(body.coinValueIrr);
+  if (!Number.isFinite(value) || value < 0 || value > 100_000_000) {
+    return jsonError('VALIDATION_ERROR', 'coinValueIrr out of range', requestId, env, 400);
+  }
+
+  await r.setCoinValueIrr(Math.round(value));
+  return jsonSuccess({ coinValueIrr: Math.round(value) }, requestId, env);
 }
 
 // ═════════════════════════════════════════════════════════════════════

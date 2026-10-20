@@ -73,6 +73,8 @@ export interface HomeData {
   nextUnlockAt?: string | null;
   /** بالاترین بخشِ تکمیل‌شدهٔ درس جاری (سرور) */
   partsDone?: number;
+  /** ارزش هر سکه به ریال (تنظیم مدیر) */
+  coinValueIrr?: number | null;
   /** دلیل خطا وقتی تولید چرخه شکست خورده (فقط برای FAILED) */
   generationError?: string | null;
 }

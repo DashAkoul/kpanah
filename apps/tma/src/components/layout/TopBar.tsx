@@ -11,7 +11,7 @@ import { haptic } from '../../lib/telegram';
  * noise (and invited "why can't I spend it here?" questions). It has
  * been replaced by a minimal, icon-only theme switch.
  */
-export function TopBar() {
+export function TopBar({ onCoinsClick }: { onCoinsClick?: () => void }) {
   const { t } = useTranslation();
   const user = useSessionStore((s) => s.user);
   const themeMode = useUiStore((s) => s.themeMode);
@@ -43,10 +43,18 @@ export function TopBar() {
           </span>
           <span className="text-xs text-text-hint">{t('learn.streak')}</span>
 
-          {/* موجودی «سکه» (واحد درون‌برنامه‌ای) */}
-          <span className="chip bg-brand-50 text-brand-700" title={t('coins.name')}>
+          {/* موجودی «سکه» — با کلیک به بخش امتیازات می‌رود */}
+          <button
+            type="button"
+            onClick={() => {
+              haptic('tap');
+              onCoinsClick?.();
+            }}
+            className="chip bg-brand-50 text-brand-700 transition active:scale-95"
+            title={t('coins.name')}
+          >
             🪙 <span className="font-semibold">{coins}</span>
-          </span>
+          </button>
         </div>
 
         <button

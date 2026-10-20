@@ -20,6 +20,7 @@ import {
   handleDueReviews,
   handleReviewSubmit,
   handleMarkPart,
+  handleSetCoinRate,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -414,6 +415,8 @@ async function dispatch(
       return handleReviewSubmit(request, context);
     case 'mark-part':
       return handleMarkPart(request, context);
+    case 'set-coin-rate':
+      return handleSetCoinRate(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

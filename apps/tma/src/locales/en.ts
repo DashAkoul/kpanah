@@ -146,9 +146,12 @@ export default {
       listenAgain: 'Listen again',
     },
     coins: {
+      rate: 'Coin value: {{value}} IRR',
+      adminRate: 'Coin value (IRR)',
+      adminRateHint: 'Base for future coin → Stars/crypto conversion. Admin only.',
       name: 'Coins',
       balance: 'Your coin balance',
-      explain: 'Coins are in-app credit, not Telegram Stars. You earn them for each lesson and can spend them on a subscription in the store.',
+      explain: 'Stay active in and around your language learning to earn coins — here you can turn them into things you would not believe.',
       spendInStore: 'Use in store',
       convert: 'Convert & withdraw',
       toStars: 'Convert to Telegram Stars',

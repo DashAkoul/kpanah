@@ -460,6 +460,13 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** تعیین ارزش هر سکه (فقط مدیر) */
+  setCoinRate: (coinValueIrr: number) =>
+    callApi<{ coinValueIrr: number }>('set-coin-rate', {
+      method: 'POST',
+      body: { coinValueIrr },
+    }),
+
   /** ثبت تکمیل یک بخش از درس (سمت سرور) */
   markPart: (body: { lessonId: string; part: 1 | 2 | 3 }) =>
     callApi<{ partsDone: number }>('mark-part', { method: 'POST', body }),

@@ -6,6 +6,8 @@ import { LearnTab } from '../features/learn/LearnTab';
 import { LessonPlayer } from '../features/learn/LessonPlayer';
 import { LessonResult } from '../features/learn/LessonResult';
 import { OnboardingFlow } from '../features/onboarding/OnboardingFlow';
+import { StoreTab } from '../features/store/StoreTab';
+import { PanelTab } from '../features/panel/PanelTab';
 import { Button, Toast } from '../components/ui';
 import { MessageBanner } from '../components/MessageBanner';
 import { useHome, useCompleteLesson } from '../hooks/useApi';
@@ -226,7 +228,17 @@ export function AppShell() {
         )}
         {tab === 'profile' && (
           <Suspense fallback={<TabFallback />}>
-            <ProfileTab />
+            <ProfileTab onNavigate={setTab} />
+          </Suspense>
+        )}
+        {tab === 'store' && (
+          <Suspense fallback={<TabFallback />}>
+            <StoreTab />
+          </Suspense>
+        )}
+        {tab === 'panel' && (
+          <Suspense fallback={<TabFallback />}>
+            <PanelTab onGoStore={() => setTab('store')} />
           </Suspense>
         )}
         {tab === 'settings' && (

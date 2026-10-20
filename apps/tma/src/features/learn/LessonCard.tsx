@@ -123,26 +123,32 @@ function PartRow({
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-1 text-sm font-semibold text-text">
           <span className="truncate">{label}</span>
-          {done && <span className="shrink-0 text-success-500">✓</span>}
         </p>
         <p className="text-[11px] text-text-hint">
           {subtitle} · {itemCount} {t('common.day') === 'Day' ? 'items' : 'آیتم'}
         </p>
       </div>
 
-      <button
-        type="button"
-        onClick={unlocked ? onStart : undefined}
-        disabled={!unlocked}
-        className={clsx(
-          'shrink-0 rounded-xl px-3.5 py-2 text-xs font-semibold transition active:scale-95',
-          unlocked
-            ? 'bg-accent text-accent-text'
-            : 'bg-[var(--surface-sunken)] text-text-muted'
-        )}
-      >
-        {unlocked ? `🟢 ${ctaLabel}` : `🔒 ${ctaLabel}`}
-      </button>
+      {/* ⚠️ بخشِ تمام‌شده دکمه ندارد؛ فقط تیک سبز */}
+      {done ? (
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-success-100 text-base font-bold text-success-500">
+          ✓
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={unlocked ? onStart : undefined}
+          disabled={!unlocked}
+          className={clsx(
+            'shrink-0 rounded-xl px-3.5 py-2 text-xs font-semibold transition active:scale-95',
+            unlocked
+              ? 'bg-accent text-accent-text'
+              : 'bg-[var(--surface-sunken)] text-text-muted'
+          )}
+        >
+          {unlocked ? `🟢 ${ctaLabel}` : `🔒 ${ctaLabel}`}
+        </button>
+      )}
     </Card>
   );
 }

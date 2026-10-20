@@ -2,11 +2,17 @@ import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { haptic } from '../../lib/telegram';
 
-export type TabKey = 'learn' | 'profile' | 'settings';
+export type TabKey = 'profile' | 'store' | 'learn' | 'panel' | 'settings';
 
+/**
+ * ترتیب آرایه = راست→چپ در RTL:
+ * کاربری، فروشگاه، آموزش، پنل، تنظیمات
+ */
 const TABS: { key: TabKey; icon: string }[] = [
   { key: 'profile', icon: '👤' },
+  { key: 'store', icon: '🛒' },
   { key: 'learn', icon: '🎓' },
+  { key: 'panel', icon: '🗂' },
   { key: 'settings', icon: '⚙️' },
 ];
 
@@ -39,15 +45,15 @@ export function BottomNav({
                 onChange(key);
               }}
               className={clsx(
-                'flex flex-1 flex-col items-center gap-1 py-2.5 transition-colors',
+                'flex flex-1 flex-col items-center gap-0.5 py-2 transition-colors',
                 isActive ? 'text-accent' : 'text-text-hint'
               )}
               aria-current={isActive ? 'page' : undefined}
             >
-              <span className={clsx('text-xl transition-transform', isActive && 'scale-110')}>
+              <span className={clsx('text-lg transition-transform', isActive && 'scale-110')}>
                 {icon}
               </span>
-              <span className={clsx('text-[11px]', isActive && 'font-semibold')}>
+              <span className={clsx('text-[10px]', isActive && 'font-semibold')}>
                 {t(`tabs.${key}`)}
               </span>
             </button>

@@ -197,6 +197,11 @@ export default {
       sourceGift: 'هدیه',
     },
     store: {
+      payWithCoins: 'خرید با {{count}} سکه',
+      yourCoins: 'موجودی تو: {{count}} سکه',
+      needMoreCoins: '{{need}} سکهٔ دیگر لازم داری',
+      coinSuccess: 'اشتراک با {{count}} سکه فعال شد 🎉',
+      coinFailed: 'خرید با سکه انجام نشد',
       paymentMethods: 'روش‌های پرداخت',
       payStars: 'پرداخت با استارز تلگرام',
       payGateway: 'پرداخت با درگاه بانکی',

@@ -21,7 +21,9 @@ export type SubscriptionSource =
   | 'TELEGRAM_STARS'
   | 'ADMIN_GIFT'
   | 'TRIAL'
-  | 'ZARINPAL';
+  | 'ZARINPAL'
+  /** خرید با «سکه» (واحد اعتبار درون‌برنامه) */
+  | 'COINS';
 
 export type CycleStatus = 'ACTIVE' | 'COMPLETED' | 'GENERATING' | 'FAILED';
 

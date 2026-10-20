@@ -460,6 +460,13 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** خرید اشتراک با سکه */
+  buyWithCoins: (body: { planId: string }) =>
+    callApi<{ ok: boolean; coinsSpent: number; balance: number; expiresAt: string }>(
+      'buy-with-coins',
+      { method: 'POST', body }
+    ),
+
   /** تعیین ارزش هر سکه (فقط مدیر) */
   setCoinRate: (coinValueIrr: number) =>
     callApi<{ coinValueIrr: number }>('set-coin-rate', {

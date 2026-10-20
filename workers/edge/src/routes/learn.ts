@@ -736,6 +736,109 @@ export async function handleRetryCycle(
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=buy-with-coins  → خرید اشتراک با سکه
+// ═════════════════════════════════════════════════════════════════════
+
+/** ارزش پیش‌فرض هر سکه اگر مدیر تعیین نکرده باشد (ریال) */
+const DEFAULT_COIN_VALUE_IRR = 5_000;
+
+/**
+ * قیمت هر پلن بر حسب سکه = قیمت نهایی (ریال) ÷ ارزش سکه.
+ *
+ * ⚠️ ارزش سکه را مدیر در پنل تنظیم می‌کند؛ پس با تغییر آن، قیمت همهٔ
+ * پلن‌ها خودکار عوض می‌شود و نیازی به ویرایش دستی هر پلن نیست.
+ */
+function coinPriceFor(priceIrr: number, discountPercent: number, rate: number): number {
+  const finalIrr = Math.round(priceIrr * (1 - discountPercent / 100));
+  return Math.max(1, Math.ceil(finalIrr / Math.max(1, rate)));
+}
+
+export async function handleBuyWithCoins(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const body = (await readJson(request)) as { planId?: string };
+  const planId = typeof body.planId === 'string' ? body.planId : '';
+  if (!planId) {
+    return jsonError('VALIDATION_ERROR', 'planId is required', requestId, env, 400);
+  }
+
+  const plan = await r.getPlanById(planId);
+  if (!plan || !plan.is_active) {
+    return jsonError('NOT_FOUND', 'Plan not found', requestId, env, 404);
+  }
+
+  const economy = await r.getEconomySettings();
+  const rate =
+    typeof economy.coinValueIrr === 'number' && economy.coinValueIrr > 0
+      ? economy.coinValueIrr
+      : DEFAULT_COIN_VALUE_IRR;
+
+  const coinPrice = coinPriceFor(
+    Number(plan.price_irr),
+    Number(plan.discount_percent) || 0,
+    rate
+  );
+  const balance = user.stars_balance ?? 0;
+
+  if (balance < coinPrice) {
+    return jsonError(
+      'VALIDATION_ERROR',
+      `insufficient coins (${balance}/${coinPrice})`,
+      requestId,
+      env,
+      400,
+      'errors.insufficientCoins'
+    );
+  }
+
+  // کسر سکه
+  await r.updateUser(user.id, { stars_balance: balance - coinPrice });
+
+  let subscription;
+  try {
+    subscription = await r.createSubscription({
+      userId: user.id,
+      planType: plan.plan_type,
+      source: 'COINS',
+      priceStars: null,
+      paymentRef: `coins:${coinPrice}`,
+      extend: true,
+    });
+  } catch {
+    // اگر ستون source مقدار COINS را نپذیرفت، با یادداشت ثبت می‌شود
+    subscription = await r.createSubscription({
+      userId: user.id,
+      planType: plan.plan_type,
+      source: 'ADMIN_GIFT',
+      priceStars: null,
+      paymentRef: `coins:${coinPrice}`,
+      grantNote: 'خرید با سکه',
+      extend: true,
+    });
+  }
+
+  return jsonSuccess(
+    {
+      ok: true,
+      coinsSpent: coinPrice,
+      balance: balance - coinPrice,
+      expiresAt: subscription.expires_at,
+      planType: plan.plan_type,
+    },
+    requestId,
+    env
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
 // POST /gate?action=set-coin-rate  (فقط مدیر)
 // ═════════════════════════════════════════════════════════════════════
 

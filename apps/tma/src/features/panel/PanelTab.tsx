@@ -24,8 +24,6 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
 
   // ارزش هر سکه (تنظیم مدیر) — پایهٔ آیندهٔ تبدیل سکه
   const { data: home, refetch } = useHome();
-  const rate = home?.coinValueIrr ?? null;
-  const [rateInput, setRateInput] = useState(String(rate ?? 0));
   const [stepInput, setStepInput] = useState(
     String(home?.coinDiscount?.coinsPerStep ?? 1000)
   );
@@ -70,12 +68,6 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
               {t('coins.explain')}
             </p>
 
-            {rate !== null && (
-              <p className="mt-2 text-[11px] text-text-hint">
-                {t('coins.rate', { value: rate.toLocaleString('fa-IR') })}
-              </p>
-            )}
-
             <Button fullWidth size="sm" className="mt-3" onClick={onGoStore}>
               {t('coins.spendInStore')}
             </Button>
@@ -88,36 +80,6 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
               <p className="mb-2 text-[11px] leading-relaxed text-text-hint">
                 {t('coins.adminRateHint')}
               </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  value={rateInput}
-                  onChange={(e) => setRateInput(e.target.value)}
-                  className="min-w-0 flex-1 rounded-xl border border-border bg-card px-3 py-2 text-sm text-text"
-                  dir="ltr"
-                />
-                <Button
-                  size="sm"
-                  loading={savingRate}
-                  onClick={async () => {
-                    setSavingRate(true);
-                    try {
-                      await api.setCoinRate({
-                        coinValueIrr: Number(rateInput) || 0,
-                        coinsPerStep: Number(stepInput) || 0,
-                        percentPerStep: Number(pctInput) || 0,
-                      });
-                      await refetch();
-                    } finally {
-                      setSavingRate(false);
-                    }
-                  }}
-                >
-                  {t('common.save')}
-                </Button>
-              </div>
-
               <p className="mt-4 mb-1 text-xs font-semibold text-text">
                 {t('coins.adminDiscount')}
               </p>

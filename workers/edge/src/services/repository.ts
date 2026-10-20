@@ -466,6 +466,7 @@ export class ContentRepository {
     limit = 500
   ): Promise<
     {
+      id: string;
       telegram_id: number;
       first_name: string | null;
       ui_language: string | null;
@@ -474,12 +475,13 @@ export class ContentRepository {
   > {
     try {
       const rows = await this.db.select<{
+        id: string;
         telegram_id: number;
         first_name: string | null;
         ui_language: string | null;
         timezone: string | null;
       }>('users', {
-        select: 'telegram_id,first_name,ui_language,timezone',
+        select: 'id,telegram_id,first_name,ui_language,timezone',
         is_blocked: 'eq.false',
         order: 'created_at.desc',
         limit: String(limit),
@@ -961,6 +963,8 @@ export class ContentRepository {
   async getUserPrefs(userId: string): Promise<{
     dailyMinutes: number | null;
     dialect: string | null;
+    reminderOn: boolean | null;
+    reminderTime: string | null;
   }> {
     try {
       const rows = await this.db.select<{ value: Record<string, unknown> }>('app_settings', {
@@ -975,20 +979,29 @@ export class ContentRepository {
             ? v.dailyMinutes
             : null,
         dialect: typeof v.dialect === 'string' ? v.dialect : null,
+        reminderOn: typeof v.reminderOn === 'boolean' ? v.reminderOn : null,
+        reminderTime: typeof v.reminderTime === 'string' ? v.reminderTime : null,
       };
     } catch {
-      return { dailyMinutes: null, dialect: null };
+      return { dailyMinutes: null, dialect: null, reminderOn: null, reminderTime: null };
     }
   }
 
   async saveUserPrefs(
     userId: string,
-    patch: { dailyMinutes?: number | null; dialect?: string | null }
+    patch: {
+      dailyMinutes?: number | null;
+      dialect?: string | null;
+      reminderOn?: boolean | null;
+      reminderTime?: string | null;
+    }
   ): Promise<void> {
     const current = await this.getUserPrefs(userId);
     const value = {
       dailyMinutes: patch.dailyMinutes ?? current.dailyMinutes,
       dialect: patch.dialect ?? current.dialect,
+      reminderOn: patch.reminderOn ?? current.reminderOn,
+      reminderTime: patch.reminderTime ?? current.reminderTime,
     };
     await this.db
       .insert(
@@ -1042,6 +1055,72 @@ export class ContentRepository {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * بخش‌های تکمیل‌شدهٔ یک درس — سمت سرور (نه localStorage) تا با تغییر
+   * دستگاه هم باقی بماند.
+   * ذخیره در `app_settings` با کلید `user:<id>:parts:<lessonId>`.
+   */
+  async getLessonParts(userId: string, lessonId: string): Promise<number> {
+    try {
+      const rows = await this.db.select<{ value: Record<string, unknown> }>('app_settings', {
+        key: `eq.user:${userId}:parts:${lessonId}`,
+        select: 'value',
+        limit: '1',
+      });
+      const v = asRows(rows)[0]?.value ?? {};
+      if (v.p3) return 3;
+      if (v.p2) return 2;
+      if (v.p1) return 1;
+      return 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async markLessonPart(userId: string, lessonId: string, part: 1 | 2 | 3): Promise<void> {
+    const current = await this.getLessonParts(userId, lessonId);
+    if (part <= current) return;
+    await this.db
+      .insert(
+        'app_settings',
+        {
+          key: `user:${userId}:parts:${lessonId}`,
+          value: { p1: true, ...(part >= 2 ? { p2: true } : {}), ...(part >= 3 ? { p3: true } : {}) },
+          description: 'lesson parts progress',
+        },
+        { upsertOn: 'key' }
+      )
+      .catch(() => undefined);
+  }
+
+  /**
+   * همهٔ ترجیحات کاربران در یک کوئری — برای کرون یادآور.
+   * کلیدها به شکل `user:<id>:prefs` هستند.
+   */
+  async listAllUserPrefs(): Promise<
+    Map<string, { reminderOn: boolean | null; reminderTime: string | null }>
+  > {
+    const out = new Map<string, { reminderOn: boolean | null; reminderTime: string | null }>();
+    try {
+      const rows = await this.db.select<{ key: string; value: Record<string, unknown> }>(
+        'app_settings',
+        { key: 'like.user:*:prefs', select: 'key,value', limit: '2000' }
+      );
+      for (const row of asRows(rows)) {
+        const userId = row.key.split(':')[1];
+        if (!userId) continue;
+        const v = row.value ?? {};
+        out.set(userId, {
+          reminderOn: typeof v.reminderOn === 'boolean' ? v.reminderOn : null,
+          reminderTime: typeof v.reminderTime === 'string' ? v.reminderTime : null,
+        });
+      }
+    } catch {
+      /* بی‌صدا: پیش‌فرض ۹ صبح */
+    }
+    return out;
   }
 
   async upsertLexicalItem(

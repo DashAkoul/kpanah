@@ -19,6 +19,7 @@ import {
   handleRetryCycle,
   handleDueReviews,
   handleReviewSubmit,
+  handleMarkPart,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -239,15 +240,15 @@ export default {
     try {
       if (cron === '0 * * * *') {
         const res = await runHourlyMaintenance(env);
-        // یادآور روزانه به وقت **محلی هر کاربر** (ساعت ۹)
-        const nudge = await runDailyNudges(env);
         console.log(
-          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}, nudges: ${nudge.sent}`
+          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}`
         );
       } else if (cron === '*/5 * * * *') {
         const res = await runBackgroundGeneration(env);
+        // یادآور روزانه در پنجرهٔ ±۵ دقیقهٔ ساعتِ انتخابی کاربر
+        const nudge = await runDailyNudges(env);
         console.log(
-          `[cron:gen] cycles=${res.cycles} lessons=${res.lessons} retried=${res.retried} failed=${res.failed}`
+          `[cron:gen] cycles=${res.cycles} lessons=${res.lessons} retried=${res.retried} failed=${res.failed} nudges=${nudge.sent}`
         );
       } else if (cron === '0 9 * * *') {
         const res = await runDailyNudges(env);
@@ -411,6 +412,8 @@ async function dispatch(
       return handleDueReviews(request, context);
     case 'review-submit':
       return handleReviewSubmit(request, context);
+    case 'mark-part':
+      return handleMarkPart(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

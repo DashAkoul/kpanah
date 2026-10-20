@@ -152,38 +152,53 @@ const NUDGE: Record<string, string> = {
 };
 
 /**
- * یادآور روزانه — **به وقت محلی خود کاربر**.
+ * یادآور روزانه — **به وقت و ساعتی که خود کاربر در تنظیمات انتخاب کرده**.
  *
- * ⚠️ باگ رفع‌شده: قبلاً کرون `0 9 * * *` (UTC) اجرا می‌شد و کاربر تهران
- * ساعت ۱۲:۳۰ پیام می‌گرفت. حالا این تابع هر ساعت اجرا می‌شود و فقط برای
- * کاربرانی پیام می‌فرستد که ساعت محلی‌شان ۹ است.
+ * ⚠️ قبلاً همیشه ساعت ۹ محلی بود و انتخاب کاربر نادیده گرفته می‌شد.
+ * حالا `reminderOn` و `reminderTime` (HH:MM) از `app_settings` خوانده می‌شود
+ * و این تابع از کرونِ هر ۵ دقیقه اجرا می‌شود تا پنجرهٔ ±۵ دقیقه‌ای دقیق باشد.
  */
-export async function runDailyNudges(
-  env: Env,
-  limit = 300,
-  targetLocalHour = 9
-): Promise<{ sent: number }> {
+export async function runDailyNudges(env: Env, limit = 500): Promise<{ sent: number }> {
   if (!env.TELEGRAM_BOT_TOKEN) return { sent: 0 };
 
   const r = repo(env);
   const users = await r.listReminderTargets(limit);
+  const prefsMap = await r.listAllUserPrefs();
   let sent = 0;
 
   for (const u of users) {
-    // ساعت محلی کاربر — پیش‌فرض UTC اگر ثبت نشده باشد
+    const prefs = prefsMap.get(u.id);
+    // اگر کاربر یادآور را خاموش کرده، پیام نده
+    if (prefs?.reminderOn === false) continue;
+
+    const [targetHour, targetMinute] = (prefs?.reminderTime ?? '09:00')
+      .split(':')
+      .map((n) => Number(n) || 0);
+
+    // ساعت و دقیقهٔ محلی کاربر
     let localHour: number;
+    let localMinute: number;
     try {
-      localHour = Number(
-        new Intl.DateTimeFormat('en-US', {
-          timeZone: u.timezone || 'UTC',
-          hour: '2-digit',
-          hour12: false,
-        }).format(new Date())
-      );
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: u.timezone || 'UTC',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date());
+      const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+      localHour = get('hour') % 24;
+      localMinute = get('minute');
     } catch {
       localHour = new Date().getUTCHours();
+      localMinute = new Date().getUTCMinutes();
     }
-    if (localHour !== targetLocalHour) continue;
+
+    // پنجرهٔ ۵ دقیقه‌ای تا با کرونِ هر ۵ دقیقه یک بار بخورد
+    const inWindow =
+      localHour === targetHour &&
+      localMinute >= (targetMinute ?? 0) &&
+      localMinute < (targetMinute ?? 0) + 5;
+    if (!inWindow) continue;
 
     const lang = u.ui_language ?? 'fa';
     const template = NUDGE[lang] ?? NUDGE.en!;

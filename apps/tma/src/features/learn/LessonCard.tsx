@@ -121,8 +121,9 @@ function PartRow({
       </div>
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-text">
-          {label} {done ? '✅' : ''}
+        <p className="flex items-center gap-1 text-sm font-semibold text-text">
+          <span className="truncate">{label}</span>
+          {done && <span className="shrink-0 text-success-500">✓</span>}
         </p>
         <p className="text-[11px] text-text-hint">
           {subtitle} · {itemCount} {t('common.day') === 'Day' ? 'items' : 'آیتم'}

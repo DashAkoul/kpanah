@@ -80,8 +80,13 @@ export function SettingsTab() {
   const deleteAccount = useDeleteAccount();
 
   const [deleting, setDeleting] = useState(false);
-  const [reminderOn, setReminderOn] = useState(readReminderPref());
-  const [reminderTime, setReminderTime] = useState<string>(readReminderTime());
+  // مقدار سرور اولویت دارد (تا روی دستگاه دیگر هم همان ساعت باشد)
+  const [reminderOn, setReminderOn] = useState(
+    user?.reminderOn ?? readReminderPref()
+  );
+  const [reminderTime, setReminderTime] = useState<string>(
+    user?.reminderTime ?? readReminderTime()
+  );
   const [legal, setLegal] = useState<'privacy' | 'terms' | null>(null);
   const [multiLang, setMultiLang] = useState(false);
 
@@ -303,6 +308,7 @@ export function SettingsTab() {
               haptic('select');
               setReminderOn(v);
               setReminderPref(v);
+              void updateProfile.mutateAsync({ reminderOn: v }).catch(() => undefined);
               showToast(v ? t('settings.reminderOn') : t('settings.reminderOff'), 'success');
             }}
           />
@@ -317,6 +323,9 @@ export function SettingsTab() {
               onChange={(e) => {
                 setReminderTime(e.target.value);
                 setReminderTimePref(e.target.value);
+                void updateProfile
+                  .mutateAsync({ reminderTime: e.target.value })
+                  .catch(() => undefined);
               }}
               className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
             />

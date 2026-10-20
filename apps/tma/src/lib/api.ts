@@ -460,6 +460,10 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** ثبت تکمیل یک بخش از درس (سمت سرور) */
+  markPart: (body: { lessonId: string; part: 1 | 2 | 3 }) =>
+    callApi<{ partsDone: number }>('mark-part', { method: 'POST', body }),
+
   /** ثبت نتیجهٔ مرور آزاد — لایتنر و آمار را به‌روز می‌کند */
   submitReview: (body: {
     answers: { term: string; isCorrect: boolean; responseMs: number }[];

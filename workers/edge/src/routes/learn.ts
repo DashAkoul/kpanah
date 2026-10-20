@@ -197,6 +197,8 @@ export async function handleHome(
   const prefs = await r.getUserPrefs(user.id);
   if (prefs.dailyMinutes) profile.dailyMinutes = prefs.dailyMinutes;
   if (prefs.dialect) profile.dialect = prefs.dialect;
+  profile.reminderOn = prefs.reminderOn;
+  profile.reminderTime = prefs.reminderTime;
 
   /**
    * ── قاعدهٔ «یک درس در روز» ────────────────────────────────────────
@@ -275,11 +277,16 @@ export async function handleHome(
     }
   }
 
+  // بخش‌های تکمیل‌شدهٔ درس جاری — سمت سرور (مستقل از دستگاه)
+  const partsDone =
+    current && currentReady ? await r.getLessonParts(user.id, current.id) : 0;
+
   return jsonSuccess(
     {
       user: profile,
       cycle: cycleDto,
       lesson: currentReady ? toLessonDto(current!) : null,
+      partsDone,
       generating: Boolean(current) && !currentReady,
       generationStatus: Boolean(current) && !currentReady ? 'GENERATING' : null,
     },
@@ -714,6 +721,43 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=mark-part  → ثبت تکمیل یک بخش از درس
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠️ قبلاً «کدام بخش تمام شده» فقط در localStorage بود؛ با تغییر دستگاه
+ * از بین می‌رفت. حالا سمت سرور ذخیره می‌شود.
+ */
+export async function handleMarkPart(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const body = (await readJson(request)) as { lessonId?: string; part?: number };
+  const lessonId = typeof body.lessonId === 'string' ? body.lessonId : '';
+  const part = Number(body.part);
+  if (!lessonId || ![1, 2, 3].includes(part)) {
+    return jsonError('VALIDATION_ERROR', 'lessonId and part (1..3) are required', requestId, env, 400);
+  }
+
+  const lesson = await r.getLessonById(lessonId);
+  if (!lesson || lesson.user_id !== user.id) {
+    return jsonError('NOT_FOUND', 'Lesson not found', requestId, env, 404);
+  }
+
+  await r.markLessonPart(user.id, lessonId, part as 1 | 2 | 3);
+  const partsDone = await r.getLessonParts(user.id, lessonId);
+
+  return jsonSuccess({ partsDone }, requestId, env);
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -2221,9 +2265,16 @@ export async function handleUpdateProfile(
   if (d.timezone) patch.timezone = d.timezone;
 
   // دقایق روزانه و گویش ستون DB ندارند → در app_settings ذخیره می‌شوند
-  const prefs: { dailyMinutes?: number | null; dialect?: string | null } = {};
+  const prefs: {
+    dailyMinutes?: number | null;
+    dialect?: string | null;
+    reminderOn?: boolean | null;
+    reminderTime?: string | null;
+  } = {};
   if (d.dailyMinutes !== undefined) prefs.dailyMinutes = d.dailyMinutes;
   if (d.dialect !== undefined) prefs.dialect = d.dialect;
+  if (d.reminderOn !== undefined) prefs.reminderOn = d.reminderOn;
+  if (d.reminderTime !== undefined) prefs.reminderTime = d.reminderTime;
   if (Object.keys(prefs).length > 0) {
     await r.saveUserPrefs(user.id, prefs);
   }
@@ -2243,6 +2294,8 @@ export async function handleUpdateProfile(
   });
   profile.dailyMinutes = effective.dailyMinutes;
   profile.dialect = effective.dialect;
+  profile.reminderOn = effective.reminderOn;
+  profile.reminderTime = effective.reminderTime;
 
   return jsonSuccess({ updated: true, user: profile }, requestId, env);
 }

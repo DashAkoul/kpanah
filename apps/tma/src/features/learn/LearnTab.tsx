@@ -224,6 +224,8 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
           completedDays={data.cycle.progress.completedDays}
           totalDays={data.cycle.progress.totalDays}
           partsDone={(() => {
+            // سرور اولویت دارد (مستقل از دستگاه)
+            if (typeof data.partsDone === 'number') return data.partsDone;
             try {
               const id = data.lesson.id;
               if (localStorage.getItem(`kpanah:part3:${id}`)) return 3;

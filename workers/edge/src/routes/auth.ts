@@ -198,6 +198,8 @@ async function issueSession(
   const profile = toUserProfile(user, subscription, { isAdmin, adminRole });
   profile.dailyMinutes = prefs.dailyMinutes;
   profile.dialect = prefs.dialect;
+  profile.reminderOn = prefs.reminderOn;
+  profile.reminderTime = prefs.reminderTime;
 
   return jsonSuccess({ token, user: profile }, requestId, env);
 }

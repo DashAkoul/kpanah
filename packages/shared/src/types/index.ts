@@ -109,6 +109,10 @@ export interface UserProfile {
   dialect?: string | null;
   /** بودجهٔ زمانی روزانهٔ کاربر به دقیقه (اختیاری) */
   dailyMinutes?: number | null;
+  /** یادآور روزانه روشن/خاموش */
+  reminderOn?: boolean | null;
+  /** ساعت یادآور (HH:MM) به وقت محلی کاربر */
+  reminderTime?: string | null;
   skillLevel: SkillLevel;
   learningGoal: string | null;
   onboardingDone: boolean;

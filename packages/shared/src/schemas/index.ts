@@ -433,6 +433,13 @@ export const updateProfileSchema = z.object({
   dailyMinutes: dailyMinutesSchema,
   learningGoal: z.string().max(200).optional(),
   timezone: z.string().max(64).optional(),
+  /** یادآور روزانه — روشن/خاموش */
+  reminderOn: z.boolean().optional(),
+  /** ساعت یادآور به وقت محلی کاربر (HH:MM) */
+  reminderTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'time must be HH:MM')
+    .optional(),
 });
 
 export const completeLessonSchema = z.object({

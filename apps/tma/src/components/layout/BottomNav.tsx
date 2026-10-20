@@ -33,6 +33,8 @@ export function BottomNav({
               key={key}
               type="button"
               onClick={() => {
+                // ⚠️ کلیک روی تبِ فعال نباید کاری کند (قبلاً نویز/پرش می‌داد)
+                if (isActive) return;
                 haptic('select');
                 onChange(key);
               }}

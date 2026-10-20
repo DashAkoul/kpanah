@@ -143,12 +143,16 @@ export function AppShell() {
         onExit={() => setScreen('tabs')}
         submitting={completeLesson.isPending}
         onPartComplete={(part) => {
-          // بخش تمام شد → تیک سبز + باز شدن بخش بعد در صفحهٔ آموزش
+          // بخش تمام شد → ثبت سمت سرور + تیک سبز + باز شدن بخش بعد
+          const lessonId = homeData.lesson!.id;
           try {
-            localStorage.setItem(`kpanah:part${part}:${homeData.lesson!.id}`, '1');
+            localStorage.setItem(`kpanah:part${part}:${lessonId}`, '1');
           } catch {
             /* ignore */
           }
+          void import('../lib/api').then(({ api }) =>
+            api.markPart({ lessonId, part }).catch(() => undefined)
+          );
           setScreen('tabs');
           void refetchHome();
         }}

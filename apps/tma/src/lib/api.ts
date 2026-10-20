@@ -460,19 +460,12 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
-  /** خرید اشتراک با سکه */
-  buyWithCoins: (body: { planId: string }) =>
-    callApi<{ ok: boolean; coinsSpent: number; balance: number; expiresAt: string }>(
-      'buy-with-coins',
-      { method: 'POST', body }
-    ),
-
   /** تعیین ارزش هر سکه (فقط مدیر) */
-  setCoinRate: (body: {
-    coinValueIrr?: number;
-    coinsPerStep?: number;
-    percentPerStep?: number;
-  }) => callApi<{ economy: Record<string, unknown> }>('set-coin-rate', { method: 'POST', body }),
+  setCoinRate: (body: { coinsPerStep?: number; percentPerStep?: number }) =>
+    callApi<{ economy: Record<string, unknown> }>('set-coin-rate', {
+      method: 'POST',
+      body,
+    }),
 
   /** ثبت تکمیل یک بخش از درس (سمت سرور) */
   markPart: (body: { lessonId: string; part: 1 | 2 | 3 }) =>

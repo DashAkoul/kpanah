@@ -146,6 +146,11 @@ export default {
       listenAgain: 'Listen again',
     },
     coins: {
+      adminDiscount: 'Coin discount rule',
+      adminDiscountHint: 'How many coins give how much off the monthly plan. Other plans are derived automatically.',
+      coinsPerStep: 'Coins',
+      percentPerStep: 'Discount %',
+      adminDiscountExample: 'e.g. every {{step}} coins = {{pct}}% off the monthly plan',
       rate: 'Coin value: {{value}} IRR',
       adminRate: 'Coin value (IRR)',
       adminRateHint: 'Base for future coin → Stars/crypto conversion. Admin only.',
@@ -197,6 +202,11 @@ export default {
       sourceGift: 'Gift',
     },
     store: {
+      useCoinsForDiscount: 'Use coins for a discount',
+      useCoinsHint: 'Spend your coins to lower this subscription price',
+      coinDiscountApplied: '{{percent}}% off applies to this subscription',
+      coinsTooFew: 'Not enough coins for a discount yet',
+      finalPrice: 'Final price: {{stars}} ⭐',
       payWithCoins: 'Buy with {{count}} coins',
       yourCoins: 'Your balance: {{count}} coins',
       needMoreCoins: 'You need {{need}} more coins',

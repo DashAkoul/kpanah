@@ -468,11 +468,11 @@ export const api = {
     ),
 
   /** تعیین ارزش هر سکه (فقط مدیر) */
-  setCoinRate: (coinValueIrr: number) =>
-    callApi<{ coinValueIrr: number }>('set-coin-rate', {
-      method: 'POST',
-      body: { coinValueIrr },
-    }),
+  setCoinRate: (body: {
+    coinValueIrr?: number;
+    coinsPerStep?: number;
+    percentPerStep?: number;
+  }) => callApi<{ economy: Record<string, unknown> }>('set-coin-rate', { method: 'POST', body }),
 
   /** ثبت تکمیل یک بخش از درس (سمت سرور) */
   markPart: (body: { lessonId: string; part: 1 | 2 | 3 }) =>
@@ -573,8 +573,19 @@ export const api = {
   adminPlanDelete: (id: string) =>
     callApi<{ deleted: boolean }>('admin-plan-delete', { method: 'POST', body: { id } }),
 
-  createInvoice: (planId: string) =>
-    callApi<{ invoiceLink: string; amountStars: number }>('create-invoice', {
+  createInvoice: (planId: string, useCoins = false) =>
+    callApi<{
+      invoiceLink: string;
+      amountStars: number;
+      discountPercent?: number;
+      discountIrr?: number;
+    }>('create-invoice', {
+      method: 'POST',
+      body: { planId, useCoins },
+    }),
+
+  previewDiscount: (planId: string) =>
+    callApi<{ percent: number; irr: number; finalStars: number }>('preview-discount', {
       method: 'POST',
       body: { planId },
     }),

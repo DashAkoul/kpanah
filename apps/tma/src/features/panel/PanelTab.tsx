@@ -26,6 +26,12 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
   const { data: home, refetch } = useHome();
   const rate = home?.coinValueIrr ?? null;
   const [rateInput, setRateInput] = useState(String(rate ?? 0));
+  const [stepInput, setStepInput] = useState(
+    String(home?.coinDiscount?.coinsPerStep ?? 1000)
+  );
+  const [pctInput, setPctInput] = useState(
+    String(home?.coinDiscount?.percentPerStep ?? 5)
+  );
   const [savingRate, setSavingRate] = useState(false);
 
   return (
@@ -97,7 +103,11 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
                   onClick={async () => {
                     setSavingRate(true);
                     try {
-                      await api.setCoinRate(Number(rateInput) || 0);
+                      await api.setCoinRate({
+                        coinValueIrr: Number(rateInput) || 0,
+                        coinsPerStep: Number(stepInput) || 0,
+                        percentPerStep: Number(pctInput) || 0,
+                      });
                       await refetch();
                     } finally {
                       setSavingRate(false);
@@ -107,6 +117,41 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
                   {t('common.save')}
                 </Button>
               </div>
+
+              <p className="mt-4 mb-1 text-xs font-semibold text-text">
+                {t('coins.adminDiscount')}
+              </p>
+              <p className="mb-2 text-[11px] leading-relaxed text-text-hint">
+                {t('coins.adminDiscountHint')}
+              </p>
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <p className="mb-1 text-[10px] text-text-hint">{t('coins.coinsPerStep')}</p>
+                  <input
+                    type="number"
+                    min={1}
+                    value={stepInput}
+                    onChange={(e) => setStepInput(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-card px-3 py-2 text-sm text-text"
+                    dir="ltr"
+                  />
+                </div>
+                <div className="flex-1">
+                  <p className="mb-1 text-[10px] text-text-hint">{t('coins.percentPerStep')}</p>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={pctInput}
+                    onChange={(e) => setPctInput(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-card px-3 py-2 text-sm text-text"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+              <p className="mt-2 text-[10px] text-text-muted">
+                {t('coins.adminDiscountExample', { step: stepInput, pct: pctInput })}
+              </p>
             </Card>
           )}
 

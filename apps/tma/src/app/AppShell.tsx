@@ -212,7 +212,7 @@ export function AppShell() {
   // ── Tabs ─────────────────────────────────────────────────────────
   return (
     <div className="flex min-h-[100dvh] flex-col bg-bg">
-      <TopBar />
+      <TopBar onCoinsClick={() => setTab('panel')} />
       <MessageBanner />
 
       <main className="flex-1">

@@ -1123,6 +1123,34 @@ export class ContentRepository {
     return out;
   }
 
+  /** تنظیمات اقتصادی سراسری (app_settings key='economy') */
+  async getEconomySettings(): Promise<Record<string, unknown>> {
+    try {
+      const rows = await this.db.select<{ value: Record<string, unknown> }>('app_settings', {
+        key: 'eq.economy',
+        select: 'value',
+        limit: '1',
+      });
+      return asRows(rows)[0]?.value ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** ارزش هر سکه (ریال) — قابل تغییر توسط مدیر */
+  async setCoinValueIrr(value: number): Promise<void> {
+    const current = await this.getEconomySettings();
+    await this.db.insert(
+      'app_settings',
+      {
+        key: 'economy',
+        value: { ...current, coinValueIrr: value },
+        description: 'پارامترهای اقتصاد درون‌برنامه',
+      },
+      { upsertOn: 'key' }
+    );
+  }
+
   async upsertLexicalItem(
     userId: string,
     targetLanguage: string,

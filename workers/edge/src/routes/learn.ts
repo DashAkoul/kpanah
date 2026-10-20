@@ -31,6 +31,11 @@ import type {
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import {
+  coinDiscountFor,
+  DEFAULT_COIN_DISCOUNT,
+  type CoinDiscountConfig,
+} from './store';
+import {
   ContentRepository,
   buildProgressDashboard,
   toCycleDto,
@@ -292,6 +297,10 @@ export async function handleHome(
       partsDone,
       coinValueIrr:
         typeof economy.coinValueIrr === 'number' ? economy.coinValueIrr : null,
+      coinDiscount:
+        economy.coinDiscount && typeof economy.coinDiscount === 'object'
+          ? economy.coinDiscount
+          : null,
       generating: Boolean(current) && !currentReady,
       generationStatus: Boolean(current) && !currentReady ? 'GENERATING' : null,
     },
@@ -736,6 +745,78 @@ export async function handleRetryCycle(
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=preview-discount → درصد تخفیف سکه‌ها برای یک پلن
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠️ نرخ تبدیل سکه→درصد **به کلاینت فرستاده نمی‌شود**؛ فقط نتیجهٔ نهایی
+ * (درصد و مبلغ) برمی‌گردد تا کاربر نتواند نرخ را مهندسی معکوس کند.
+ */
+export async function handlePreviewDiscount(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const body = (await readJson(request)) as { planId?: string };
+  const planId = typeof body.planId === 'string' ? body.planId : '';
+  const plan = planId ? await r.getPlanById(planId) : null;
+  if (!plan) return jsonError('NOT_FOUND', 'Plan not found', requestId, env, 404);
+
+  const economy = await r.getEconomySettings();
+  const rawCfg = (economy.coinDiscount ?? {}) as Partial<CoinDiscountConfig>;
+  const cfg: CoinDiscountConfig = {
+    coinsPerStep: Number(rawCfg.coinsPerStep) || DEFAULT_COIN_DISCOUNT.coinsPerStep,
+    percentPerStep: Number(rawCfg.percentPerStep) || DEFAULT_COIN_DISCOUNT.percentPerStep,
+  };
+
+  const plans = await r.getPlans();
+  const monthly = plans.find((pl) => pl.planType === '1_MONTH') ?? plan;
+  // ⚠️ Plan (camelCase) و PlanRow (snake_case) هر دو در گردش‌اند
+  const irrOf = (p: unknown) => {
+    const o = p as { price_irr?: number; priceIrr?: number; discount_percent?: number; discountPercent?: number };
+    return {
+      irr: Number(o.price_irr ?? o.priceIrr ?? 0),
+      disc: Number(o.discount_percent ?? o.discountPercent ?? 0),
+    };
+  };
+  const m = irrOf(monthly);
+  const pl = irrOf(plan);
+  const monthlyFinalIrr = Math.round(m.irr * (1 - m.disc / 100));
+  const planFinalIrr = Math.round(pl.irr * (1 - pl.disc / 100));
+
+  const d = coinDiscountFor(
+    user.stars_balance ?? 0,
+    planFinalIrr,
+    monthlyFinalIrr,
+    cfg
+  );
+
+  return jsonSuccess(
+    {
+      percent: d.percent,
+      irr: d.irr,
+      finalStars: Math.max(
+        1,
+        Math.ceil(
+          Number((plan as unknown as { price_stars?: number; finalPriceStars?: number }).price_stars ??
+            (plan as unknown as { finalPriceStars?: number }).finalPriceStars ?? 0) *
+            (1 - pl.disc / 100) *
+            (1 - d.percent / 100)
+        )
+      ),
+    },
+    requestId,
+    env
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
 // POST /gate?action=buy-with-coins  → خرید اشتراک با سکه
 // ═════════════════════════════════════════════════════════════════════
 
@@ -862,14 +943,26 @@ export async function handleSetCoinRate(
   const admin = isAdminFromEnv(env, telegramId) || Boolean(user.is_admin);
   if (!admin) return jsonError('UNAUTHORIZED', 'admin only', requestId, env, 403);
 
-  const body = (await readJson(request)) as { coinValueIrr?: unknown };
+  const body = (await readJson(request)) as {
+    coinValueIrr?: unknown;
+    coinsPerStep?: unknown;
+    percentPerStep?: unknown;
+  };
+
   const value = Number(body.coinValueIrr);
-  if (!Number.isFinite(value) || value < 0 || value > 100_000_000) {
-    return jsonError('VALIDATION_ERROR', 'coinValueIrr out of range', requestId, env, 400);
+  if (Number.isFinite(value) && value >= 0 && value <= 100_000_000) {
+    await r.setCoinValueIrr(Math.round(value));
   }
 
-  await r.setCoinValueIrr(Math.round(value));
-  return jsonSuccess({ coinValueIrr: Math.round(value) }, requestId, env);
+  // پیکربندی تخفیف: هر `coinsPerStep` سکه = `percentPerStep`٪ روی پلن یک‌ماهه
+  const step = Number(body.coinsPerStep);
+  const pct = Number(body.percentPerStep);
+  if (Number.isFinite(step) && Number.isFinite(pct) && step > 0 && pct > 0 && pct <= 100) {
+    await r.setCoinDiscountConfig(Math.round(step), Math.round(pct));
+  }
+
+  const economy = await r.getEconomySettings();
+  return jsonSuccess({ economy }, requestId, env);
 }
 
 // ═════════════════════════════════════════════════════════════════════

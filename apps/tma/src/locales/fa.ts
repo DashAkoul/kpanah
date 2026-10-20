@@ -146,6 +146,11 @@ export default {
       listenAgain: 'دوباره بشنو',
     },
     coins: {
+      adminDiscount: 'تنظیم تخفیف سکه',
+      adminDiscountHint: 'هر چند سکه، چند درصد تخفیف روی پلن یک‌ماهه بدهد. بقیهٔ پلن‌ها خودکار محاسبه می‌شوند.',
+      coinsPerStep: 'تعداد سکه',
+      percentPerStep: 'درصد تخفیف',
+      adminDiscountExample: 'مثال: هر {{step}} سکه = {{pct}}٪ تخفیف روی یک‌ماهه',
       rate: 'ارزش هر سکه: {{value}} ریال',
       adminRate: 'ارزش هر سکه (ریال)',
       adminRateHint: 'پایهٔ محاسبهٔ تبدیل سکه به استارز/ارز دیجیتال در آینده. فقط مدیر می‌بیند.',
@@ -197,6 +202,11 @@ export default {
       sourceGift: 'هدیه',
     },
     store: {
+      useCoinsForDiscount: 'استفاده از سکه‌ها برای تخفیف',
+      useCoinsHint: 'سکه‌هایت را برای کاهش قیمت این اشتراک استفاده کن',
+      coinDiscountApplied: 'تخفیف {{percent}}٪ روی این اشتراک اعمال می‌شود',
+      coinsTooFew: 'سکه‌هایت برای تخفیف کافی نیست',
+      finalPrice: 'قیمت نهایی: {{stars}} ⭐',
       payWithCoins: 'خرید با {{count}} سکه',
       yourCoins: 'موجودی تو: {{count}} سکه',
       needMoreCoins: '{{need}} سکهٔ دیگر لازم داری',

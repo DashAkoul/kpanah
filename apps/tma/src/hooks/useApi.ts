@@ -75,6 +75,8 @@ export interface HomeData {
   partsDone?: number;
   /** ارزش هر سکه به ریال (تنظیم مدیر) */
   coinValueIrr?: number | null;
+  /** پیکربندی تخفیف سکه (تنظیم مدیر) */
+  coinDiscount?: { coinsPerStep?: number; percentPerStep?: number } | null;
   /** دلیل خطا وقتی تولید چرخه شکست خورده (فقط برای FAILED) */
   generationError?: string | null;
 }
@@ -226,12 +228,12 @@ export function useCreateInvoice() {
   const showToast = useUiStore((s) => s.showToast);
 
   return useMutation({
-    mutationFn: async (planId: string) => {
+    mutationFn: async (input: { planId: string; useCoins?: boolean }) => {
       if (MOCK) {
         await new Promise((r) => setTimeout(r, 700));
         return { invoiceLink: '', amountStars: 0, mocked: true };
       }
-      return api.createInvoice(planId);
+      return api.createInvoice(input.planId, Boolean(input.useCoins));
     },
     onError: (err) => {
       const key = err instanceof ApiClientError ? err.userMessageKey : null;

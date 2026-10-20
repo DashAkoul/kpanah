@@ -83,11 +83,46 @@ export async function handleCreateInvoice(
     return jsonError('NOT_FOUND', `Unknown plan: ${parsed.data.planId}`, requestId, env, 404);
   }
 
+  /**
+   * تخفیف با سکه: اگر کاربر بخواهد، از **همهٔ** سکه‌هایش برای تخفیف
+   * استفاده می‌شود (بعد از خرید موجودی صفر می‌شود).
+   */
+  const useCoins = (body as { useCoins?: unknown }).useCoins === true;
+
+  let starsAmount = plan.finalPriceStars;
+  let discountPercent = 0;
+  let discountIrr = 0;
+
+  if (useCoins) {
+    const user = await r.findUserById(userId);
+    const coins = user?.stars_balance ?? 0;
+
+    const economy = await r.getEconomySettings();
+    const rawCfg = (economy.coinDiscount ?? {}) as Partial<CoinDiscountConfig>;
+    const cfg: CoinDiscountConfig = {
+      coinsPerStep: Number(rawCfg.coinsPerStep) || DEFAULT_COIN_DISCOUNT.coinsPerStep,
+      percentPerStep: Number(rawCfg.percentPerStep) || DEFAULT_COIN_DISCOUNT.percentPerStep,
+    };
+
+    // قیمت پلن یک‌ماهه = مرجع تخفیف
+    const monthly = plans.find((pl) => pl.planType === '1_MONTH') ?? plan;
+    const monthlyFinalIrr = Math.round(
+      monthly.priceIrr * (1 - monthly.discountPercent / 100)
+    );
+    const planFinalIrr = Math.round(plan.priceIrr * (1 - plan.discountPercent / 100));
+
+    const d = coinDiscountFor(coins, planFinalIrr, monthlyFinalIrr, cfg);
+    discountPercent = d.percent;
+    discountIrr = d.irr;
+    starsAmount = Math.max(1, Math.ceil(plan.finalPriceStars * (1 - d.percent / 100)));
+  }
+
   const result = await createStarsInvoice(
     env.TELEGRAM_BOT_TOKEN,
     plan,
     userId,
-    telegramId
+    telegramId,
+    { starsAmount, useCoins }
   );
 
   if (!result.ok) {
@@ -105,8 +140,10 @@ export async function handleCreateInvoice(
     {
       invoiceLink: result.invoiceLink,
       planId: plan.id,
-      amountStars: plan.finalPriceStars,
+      amountStars: starsAmount,
       planTitle: plan.titleFa,
+      discountPercent,
+      discountIrr,
     },
     requestId,
     env
@@ -116,6 +153,44 @@ export async function handleCreateInvoice(
 // ═════════════════════════════════════════════════════════════════════
 // Telegram createInvoiceLink
 // ═════════════════════════════════════════════════════════════════════
+
+/**
+ * تخفیف بر اساس سکه — **نرخ تبدیل به کاربر نشان داده نمی‌شود**.
+ *
+ * قاعده: هر `coinsPerStep` سکه = `percentPerStep`٪ تخفیف روی پلن **یک‌ماهه**.
+ * برای پلن‌های دیگر، همان «مبلغ تخفیف» محاسبه و به درصدِ همان پلن تبدیل
+ * می‌شود؛ پس درصد در پلن‌های بلندتر کمتر می‌شود (چون قیمتشان بیشتر است).
+ */
+export interface CoinDiscountConfig {
+  coinsPerStep: number;
+  percentPerStep: number;
+}
+
+export const DEFAULT_COIN_DISCOUNT: CoinDiscountConfig = {
+  coinsPerStep: 1000,
+  percentPerStep: 5,
+};
+
+/** حداکثر تخفیف مجاز (درصد) — جلوگیری از اشتراک رایگان */
+const MAX_COIN_DISCOUNT_PCT = 90;
+
+export function coinDiscountFor(
+  coins: number,
+  planFinalIrr: number,
+  monthlyFinalIrr: number,
+  cfg: CoinDiscountConfig
+): { percent: number; irr: number; steps: number } {
+  const step = Math.max(1, cfg.coinsPerStep);
+  const steps = Math.floor(Math.max(0, coins) / step);
+  if (steps <= 0 || planFinalIrr <= 0) return { percent: 0, irr: 0, steps: 0 };
+
+  const moneyIrr = steps * monthlyFinalIrr * (cfg.percentPerStep / 100);
+  const percent = Math.min(
+    MAX_COIN_DISCOUNT_PCT,
+    Math.floor((moneyIrr / planFinalIrr) * 100)
+  );
+  return { percent, irr: Math.round((planFinalIrr * percent) / 100), steps };
+}
 
 export interface InvoiceResult {
   ok: boolean;
@@ -127,8 +202,11 @@ export async function createStarsInvoice(
   botToken: string,
   plan: Plan,
   userId: string,
-  telegramId: number
+  telegramId: number,
+  opts: { starsAmount?: number; useCoins?: boolean } = {}
 ): Promise<InvoiceResult> {
+  const amount = Math.max(1, Math.round(opts.starsAmount ?? plan.finalPriceStars));
+
   // payload برای بازگشت در successful_payment — باید قابل تجزیه باشد
   const payload = JSON.stringify({
     v: 1,
@@ -136,6 +214,7 @@ export async function createStarsInvoice(
     planType: plan.planType,
     userId,
     telegramId,
+    ...(opts.useCoins ? { coins: 1, stars: amount } : {}),
   });
 
   // Telegram payload محدودیت طول دارد
@@ -148,7 +227,7 @@ export async function createStarsInvoice(
     description: `${plan.durationDays} روز دسترسی کامل به معلم هوشمند تطبیقی`,
     payload,
     currency: 'XTR',
-    prices: [{ label: plan.titleFa, amount: plan.finalPriceStars }],
+    prices: [{ label: plan.titleFa, amount }],
   };
 
   try {
@@ -231,9 +310,15 @@ export async function fulfilStarPayment(
     return { ok: false, error: `unknown plan: ${payload.planId}` };
   }
 
-  const expectedStars = Math.round(
-    planRow.price_stars * (1 - planRow.discount_percent / 100)
-  );
+  /**
+   * اگر با تخفیف سکه خریده باشد، مبلغ انتظاری همان است که در payload
+   * امضاشدهٔ خودمان آمده (نه قیمت کامل پلن).
+   */
+  const payloadStars = Number((payload as { stars?: unknown }).stars);
+  const expectedStars =
+    Number.isFinite(payloadStars) && payloadStars > 0
+      ? payloadStars
+      : Math.round(planRow.price_stars * (1 - planRow.discount_percent / 100));
 
   if (input.totalAmount < expectedStars) {
     return {
@@ -265,6 +350,11 @@ export async function fulfilStarPayment(
     planType: planRow.plan_type,
     rawPayload: input,
   });
+
+  // سکه‌ها برای تخفیف مصرف شده‌اند → موجودی صفر می‌شود
+  if ((payload as { coins?: unknown }).coins === 1) {
+    await r.updateUser(user.id, { stars_balance: 0 }).catch(() => undefined);
+  }
 
   return {
     ok: true,

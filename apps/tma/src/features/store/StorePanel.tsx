@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { Plan, PlanType } from '@kpanah/shared';
 import { Card, Button, Chip, Skeleton } from '../../components/ui';
+import { useQuery } from '@tanstack/react-query';
 import { usePlans, useCreateInvoice, useHome } from '../../hooks/useApi';
 import { api } from '../../lib/api';
 import { useSessionStore } from '../../store/session';
@@ -21,6 +22,17 @@ export function StorePanel() {
   const { data, isLoading } = usePlans();
   const user = useSessionStore((s) => s.user);
   const [selected, setSelected] = useState<string | null>(null);
+  const [useCoins, setUseCoins] = useState(false);
+  const { data: home } = useHome();
+  const balance = home?.user?.starsBalance ?? 0;
+
+  // پیش‌نمایش تخفیف — درصد از سرور می‌آید (نرخ تبدیل به کلاینت نمی‌رسد)
+  const { data: discount } = useQuery({
+    queryKey: ['coin-discount', selected, balance],
+    enabled: Boolean(selected) && useCoins && balance > 0,
+    staleTime: 60_000,
+    queryFn: () => api.previewDiscount(selected!),
+  });
 
   if (isLoading || !data) {
     return (
@@ -65,9 +77,56 @@ export function StorePanel() {
         ))}
       </div>
 
+      {/* تخفیف با سکه */}
+      {selected && balance > 0 && (
+        <Card className="border-brand-200 bg-brand-50/40">
+          <button
+            type="button"
+            onClick={() => {
+              haptic('select');
+              setUseCoins((v) => !v);
+            }}
+            className="flex w-full items-center gap-3 text-start"
+          >
+            <span
+              className={
+                useCoins
+                  ? 'flex h-5 w-5 items-center justify-center rounded-md bg-accent text-[11px] text-accent-text'
+                  : 'h-5 w-5 rounded-md border border-border'
+              }
+            >
+              {useCoins ? '✓' : ''}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-semibold text-text">
+                🪙 {t('store.useCoinsForDiscount')}
+              </span>
+              <span className="block text-[11px] text-text-hint">
+                {useCoins && discount && discount.percent > 0
+                  ? t('store.coinDiscountApplied', { percent: discount.percent })
+                  : t('store.useCoinsHint')}
+              </span>
+            </span>
+          </button>
+
+          {useCoins && discount && discount.percent === 0 && (
+            <p className="mt-2 text-[11px] text-text-muted">{t('store.coinsTooFew')}</p>
+          )}
+          {useCoins && discount && discount.percent > 0 && (
+            <p className="mt-2 text-[11px] font-semibold text-success-500">
+              {t('store.finalPrice', { stars: discount.finalStars })}
+            </p>
+          )}
+        </Card>
+      )}
+
       <PurchaseButton
         plan={data.plans.find((p) => p.id === selected) ?? null}
-        onDone={() => setSelected(null)}
+        useCoins={useCoins && Boolean(discount && discount.percent > 0)}
+        onDone={() => {
+          setSelected(null);
+          setUseCoins(false);
+        }}
       />
 
       <CoinPurchaseButton
@@ -169,7 +228,15 @@ function PlanRow({
   );
 }
 
-function PurchaseButton({ plan, onDone }: { plan: Plan | null; onDone: () => void }) {
+function PurchaseButton({
+  plan,
+  useCoins,
+  onDone,
+}: {
+  plan: Plan | null;
+  useCoins?: boolean;
+  onDone: () => void;
+}) {
   const { t } = useTranslation();
   const showToast = useUiStore((s) => s.showToast);
   const invoice = useCreateInvoice();
@@ -184,7 +251,7 @@ function PurchaseButton({ plan, onDone }: { plan: Plan | null; onDone: () => voi
     }
 
     try {
-      const result = await invoice.mutateAsync(plan.id);
+      const result = await invoice.mutateAsync({ planId: plan.id, useCoins });
       const status = await openInvoice(result.invoiceLink);
 
       if (status === 'paid') {
@@ -210,7 +277,11 @@ function PurchaseButton({ plan, onDone }: { plan: Plan | null; onDone: () => voi
       onClick={() => void handleBuy()}
     >
       {plan
-        ? t('store.payStarsHint', { stars: plan.finalPriceStars })
+        ? t('store.payStarsHint', {
+            stars: useCoins
+              ? Math.max(1, Math.ceil(plan.finalPriceStars * 0.5))
+              : plan.finalPriceStars,
+          })
         : t('store.payWithStars')}
     </Button>
   );

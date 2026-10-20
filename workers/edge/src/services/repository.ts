@@ -1137,6 +1137,20 @@ export class ContentRepository {
     }
   }
 
+  /** ذخیرهٔ پیکربندی تخفیف سکه (تعداد سکه در هر پله + درصد هر پله) */
+  async setCoinDiscountConfig(coinsPerStep: number, percentPerStep: number): Promise<void> {
+    const current = await this.getEconomySettings();
+    await this.db.insert(
+      'app_settings',
+      {
+        key: 'economy',
+        value: { ...current, coinDiscount: { coinsPerStep, percentPerStep } },
+        description: 'پارامترهای اقتصاد درون‌برنامه',
+      },
+      { upsertOn: 'key' }
+    );
+  }
+
   /** ارزش هر سکه (ریال) — قابل تغییر توسط مدیر */
   async setCoinValueIrr(value: number): Promise<void> {
     const current = await this.getEconomySettings();

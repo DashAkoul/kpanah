@@ -22,6 +22,7 @@ import {
   handleMarkPart,
   handleSetCoinRate,
   handleBuyWithCoins,
+  handlePreviewDiscount,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -420,6 +421,8 @@ async function dispatch(
       return handleSetCoinRate(request, context);
     case 'buy-with-coins':
       return handleBuyWithCoins(request, context);
+    case 'preview-discount':
+      return handlePreviewDiscount(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

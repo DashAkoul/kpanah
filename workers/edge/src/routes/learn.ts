@@ -7,6 +7,7 @@ import {
   applyLeitnerReview,
   buildSkillDelta,
   computeStreak,
+  computeStreakLocal,
   nextReviewDate,
   scoreLesson,
   shouldGenerateNextCycle,
@@ -570,9 +571,16 @@ export async function handleCompleteLesson(
     usedHints: answers.filter((a) => a.usedHint).length,
   });
 
-  const streak = computeStreak(
-    user.last_active_date ? new Date(user.last_active_date) : null,
-    user.streak_count
+  /**
+   * ⚠️ استریک باید بر اساس **تاریخ محلی کاربر** حساب شود. با UTC، درس
+   * خواندن بعد از نیمه‌شب محلی (قبل از ۰۳:۳۰ تهران) دو روز را یکی می‌کرد.
+   */
+  const userTz = ((user as { timezone?: string | null }).timezone ?? 'UTC') || 'UTC';
+  const todayLocal = localDateString(userTz);
+  const streak = computeStreakLocal(
+    user.last_active_date ? String(user.last_active_date).slice(0, 10) : null,
+    user.streak_count,
+    todayLocal
   );
 
   let reward = ECONOMY.rewardPerLesson;
@@ -585,7 +593,7 @@ export async function handleCompleteLesson(
     stars_balance: user.stars_balance + reward,
     streak_count: streak.streak,
     longest_streak: Math.max(user.longest_streak, streak.streak),
-    last_active_date: new Date().toISOString().slice(0, 10),
+    last_active_date: todayLocal,
   });
 
   // ── 5. پایان چرخه؟ trigger تولید چرخه جدید ───────────────────────
@@ -1498,6 +1506,20 @@ function nextLocalMidnightMs(iso: string, timeZone: string): number {
   guess -= tzOffsetMs(timeZone, new Date(guess));
   guess -= tzOffsetMs(timeZone, new Date(guess)) - tzOffsetMs(timeZone, new Date(guess + 3_600_000));
   return guess;
+}
+
+/** تاریخ محلی کاربر به شکل YYYY-MM-DD */
+function localDateString(timeZone: string, at: Date = new Date()): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(at);
+  } catch {
+    return at.toISOString().slice(0, 10);
+  }
 }
 
 /** روز هفتهٔ محلی (۰=شنبه … ۶=جمعه) */

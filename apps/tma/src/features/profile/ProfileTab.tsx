@@ -1,35 +1,17 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Button, Chip, ProgressBar } from '../../components/ui';
 import { FREE_TRIAL_DAYS } from '@kpanah/shared';
 import { ProgressPanel } from './ProgressPanel';
-import { StorePanel } from '../store/StorePanel';
-import { SupportPanel } from '../support/SupportPanel';
-import { MessagesInbox } from './MessagesInbox';
 import { useSessionStore } from '../../store/session';
-import { AdminPanel } from '../admin/AdminPanel';
-import { api } from '../../lib/api';
-
-type SubView = 'overview' | 'store' | 'messages' | 'support' | 'admin';
 
 /**
  * Profile & Store tab — combines identity, stats, and the store,
  * matching the spec's "کاربری (User Profile & Store)" section.
  */
-export function ProfileTab() {
+export function ProfileTab({ onNavigate }: { onNavigate: (tab: 'store') => void }) {
   const { t } = useTranslation();
   const user = useSessionStore((s) => s.user);
-  const [view, setView] = useState<SubView>('overview');
-
-  // تعداد پیام‌های خوانده‌نشده — از همان کشِ بنر استفاده می‌کند
-  const { data: msgData } = useQuery({
-    queryKey: ['messages-list'],
-    queryFn: async () => (await api.messagesList()) as { messages: { read_at: string | null }[] },
-    enabled: Boolean(user),
-    staleTime: 30_000,
-  });
-  const unreadCount = (msgData?.messages ?? []).filter((m) => !m.read_at).length;
 
   if (!user) return null;
 
@@ -135,7 +117,7 @@ export function ProfileTab() {
             fullWidth
             size="sm"
             className="mt-3"
-            onClick={() => setView('store')}
+            onClick={() => onNavigate('store')}
           >
             {sub && sub.planType !== 'TRIAL'
               ? t('profile.upgrade')
@@ -144,62 +126,8 @@ export function ProfileTab() {
         </div>
       </Card>
 
-      {/* Sub-view switcher */}
-      <div className="flex gap-1 overflow-x-auto rounded-xl bg-[var(--surface-sunken)] p-1">
-        <SubTab active={view === 'overview'} onClick={() => setView('overview')}>
-          📊 {t('profile.stats')}
-        </SubTab>
-        <SubTab active={view === 'store'} onClick={() => setView('store')}>
-          🛒 {t('profile.store')}
-        </SubTab>
-        <SubTab active={view === 'messages'} onClick={() => setView('messages')}>
-          ✉️ {t('messages.title')}
-          {unreadCount > 0 && (
-            <span className="ms-1 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold text-accent-text">
-              {unreadCount}
-            </span>
-          )}
-        </SubTab>
-        <SubTab active={view === 'support'} onClick={() => setView('support')}>
-          💬 {t('support.tab')}
-        </SubTab>
-        {user.isAdmin && (
-          <SubTab active={view === 'admin'} onClick={() => setView('admin')}>
-            🛠 {t('settings.adminPanel')}
-          </SubTab>
-        )}
-      </div>
-
-      {view === 'overview' && <ProgressPanel />}
-      {view === 'store' && <StorePanel />}
-      {view === 'messages' && <MessagesInbox />}
-      {view === 'support' && <SupportPanel />}
-      {view === 'admin' && user.isAdmin && <AdminPanel />}
+      <ProgressPanel />
     </div>
-  );
-}
-
-function SubTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={
-        active
-          ? 'flex-1 rounded-lg bg-card px-3 py-2 text-xs font-semibold text-text shadow-sm transition'
-          : 'flex-1 rounded-lg px-3 py-2 text-xs font-medium text-text-hint transition'
-      }
-    >
-      {children}
-    </button>
   );
 }
 

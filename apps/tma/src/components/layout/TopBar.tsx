@@ -18,6 +18,7 @@ export function TopBar() {
   const setThemeMode = useUiStore((s) => s.setThemeMode);
 
   const streak = user?.streakCount ?? 0;
+  const coins = user?.starsBalance ?? 0;
 
   const cycleTheme = () => {
     haptic('select');
@@ -41,6 +42,11 @@ export function TopBar() {
             🔥 <span className="font-semibold">{streak}</span>
           </span>
           <span className="text-xs text-text-hint">{t('learn.streak')}</span>
+
+          {/* موجودی «سکه» (واحد درون‌برنامه‌ای) */}
+          <span className="chip bg-brand-50 text-brand-700" title={t('coins.name')}>
+            🪙 <span className="font-semibold">{coins}</span>
+          </span>
         </div>
 
         <button

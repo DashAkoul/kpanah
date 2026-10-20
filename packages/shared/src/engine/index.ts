@@ -392,6 +392,30 @@ export function daysRemaining(expiresAt: Date, now: Date = new Date()): number {
 // 6. Streak calculation
 // ═════════════════════════════════════════════════════════════════════
 
+/**
+ * استریک بر اساس **تاریخ محلی کاربر** (نه UTC).
+ *
+ * ⚠️ باگ رفع‌شده: `diffInDays` روی تاریخ UTC حساب می‌کرد. کاربر تهران که
+ * ساعت ۰۰:۳۰ محلی درس می‌خواند، در UTC همان روزِ قبل بود → دو روز متوالی
+ * «یک روز» حساب می‌شد و استریک ۴ روزه «۱» نشان می‌داد.
+ */
+export function computeStreakLocal(
+  lastDate: string | null,
+  currentStreak: number,
+  todayDate: string
+): { streak: number; isNewDay: boolean } {
+  if (!lastDate) return { streak: 1, isNewDay: true };
+  if (lastDate === todayDate) return { streak: currentStreak || 1, isNewDay: false };
+
+  const a = Date.parse(`${lastDate}T00:00:00Z`);
+  const b = Date.parse(`${todayDate}T00:00:00Z`);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return { streak: 1, isNewDay: true };
+
+  const gap = Math.round((b - a) / 86_400_000);
+  if (gap === 1) return { streak: (currentStreak || 0) + 1, isNewDay: true };
+  return { streak: 1, isNewDay: true };
+}
+
 export function computeStreak(
   lastActiveDate: Date | null,
   currentStreak: number,

@@ -9,6 +9,7 @@ import {
   type SupportedUiLanguage,
 } from '@kpanah/shared';
 import { Card, Button, Chip } from '../../components/ui';
+import { TimePicker } from '../../components/TimePicker';
 import { LanguageSelect } from '../../components/LanguageSelect';
 import { Portal } from '../../components/Portal';
 import { useSessionStore } from '../../store/session';
@@ -317,17 +318,13 @@ export function SettingsTab() {
         {reminderOn && (
           <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
             <span className="text-[11px] text-text-hint">{t('settings.reminderTime')}</span>
-            <input
-              type="time"
+            <TimePicker
               value={reminderTime}
-              onChange={(e) => {
-                setReminderTime(e.target.value);
-                setReminderTimePref(e.target.value);
-                void updateProfile
-                  .mutateAsync({ reminderTime: e.target.value })
-                  .catch(() => undefined);
+              onChange={(v) => {
+                setReminderTime(v);
+                setReminderTimePref(v);
+                void updateProfile.mutateAsync({ reminderTime: v }).catch(() => undefined);
               }}
-              className="rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
             />
           </div>
         )}

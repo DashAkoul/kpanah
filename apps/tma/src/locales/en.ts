@@ -197,6 +197,11 @@ export default {
       sourceGift: 'Gift',
     },
     store: {
+      payWithCoins: 'Buy with {{count}} coins',
+      yourCoins: 'Your balance: {{count}} coins',
+      needMoreCoins: 'You need {{need}} more coins',
+      coinSuccess: 'Subscription activated with {{count}} coins 🎉',
+      coinFailed: 'Coin purchase failed',
       paymentMethods: 'Payment methods',
       payStars: 'Pay with Telegram Stars',
       payGateway: 'Pay with bank gateway',

@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { Plan, PlanType } from '@kpanah/shared';
 import { Card, Button, Chip, Skeleton } from '../../components/ui';
-import { usePlans, useCreateInvoice } from '../../hooks/useApi';
+import { usePlans, useCreateInvoice, useHome } from '../../hooks/useApi';
+import { api } from '../../lib/api';
 import { useSessionStore } from '../../store/session';
 import { useUiStore } from '../../store/ui';
 import { openInvoice, haptic, isTelegram } from '../../lib/telegram';
@@ -65,6 +66,11 @@ export function StorePanel() {
       </div>
 
       <PurchaseButton
+        plan={data.plans.find((p) => p.id === selected) ?? null}
+        onDone={() => setSelected(null)}
+      />
+
+      <CoinPurchaseButton
         plan={data.plans.find((p) => p.id === selected) ?? null}
         onDone={() => setSelected(null)}
       />
@@ -220,4 +226,70 @@ function labelForPlan(planType: PlanType, t: (k: string) => string): string {
     TRIAL: t('profile.sourceTrial'),
   };
   return labels[planType] ?? planType;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// خرید با سکه
+// ─────────────────────────────────────────────────────────────────────
+
+/** ارزش پیش‌فرض (هم‌خوان با سرور) اگر مدیر تعیین نکرده باشد */
+const DEFAULT_COIN_VALUE_IRR = 5_000;
+
+/**
+ * خرید اشتراک با «سکه» (واحد اعتبار درون‌برنامه).
+ * قیمت سکه‌ای از قیمت ریالی پلن و ارزش سکهٔ تعیین‌شده توسط مدیر محاسبه می‌شود.
+ */
+function CoinPurchaseButton({
+  plan,
+  onDone,
+}: {
+  plan: Plan | null;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation();
+  const { data: home, refetch } = useHome();
+  const setUser = useSessionStore((s) => s.updateUser);
+  const showToast = useUiStore((s) => s.showToast);
+  const [busy, setBusy] = useState(false);
+
+  if (!plan) return null;
+
+  const rate = home?.coinValueIrr ?? DEFAULT_COIN_VALUE_IRR;
+  const finalIrr = Math.round(plan.priceIrr * (1 - (plan.discountPercent ?? 0) / 100));
+  const coinPrice = Math.max(1, Math.ceil(finalIrr / Math.max(1, rate)));
+  const balance = home?.user?.starsBalance ?? 0;
+  const enough = balance >= coinPrice;
+
+  return (
+    <div className="space-y-1">
+      <Button
+        fullWidth
+        variant="secondary"
+        disabled={!enough}
+        loading={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            const res = await api.buyWithCoins({ planId: plan.id });
+            setUser({ starsBalance: res.balance });
+            await refetch();
+            showToast(t('store.coinSuccess', { count: res.coinsSpent }), 'success');
+            onDone();
+          } catch {
+            showToast(t('store.coinFailed'), 'error');
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        🪙 {t('store.payWithCoins', { count: coinPrice })}
+      </Button>
+
+      <p className="text-center text-[11px] text-text-hint">
+        {enough
+          ? t('store.yourCoins', { count: balance })
+          : t('store.needMoreCoins', { need: coinPrice - balance })}
+      </p>
+    </div>
+  );
 }

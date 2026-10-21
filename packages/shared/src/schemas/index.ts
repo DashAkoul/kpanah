@@ -442,6 +442,36 @@ export const updateProfileSchema = z.object({
     .optional(),
 });
 
+/**
+ * آزمون کالیبراسیون — سطح برآوردی مستقل از خوداظهاری.
+ * ⚠️ فقط برای تنظیم نقطهٔ شروع استفاده می‌شود، نه برای نمره‌دهی.
+ */
+export const calibrationItemSchema = z
+  .object({
+    term: nonEmpty(120),
+    meaning: nonEmpty(200),
+    options: z.array(nonEmpty(200)).min(3).max(3),
+    correctIndex: z.number().int().min(0).max(2),
+  })
+  .refine((i) => i.correctIndex < i.options.length, { message: 'bad index' });
+
+export const calibrationTestSchema = z.object({
+  items: z.array(calibrationItemSchema).min(8).max(12),
+});
+
+export const calibrationSubmitSchema = z.object({
+  answers: z
+    .array(
+      z.object({
+        term: nonEmpty(120),
+        isCorrect: z.boolean(),
+        responseMs: z.number().int().min(0).max(600_000),
+      })
+    )
+    .min(1)
+    .max(20),
+});
+
 export const completeLessonSchema = z.object({
   lessonId: z.string().uuid(),
   durationSeconds: z.number().int().min(0).max(86_400),

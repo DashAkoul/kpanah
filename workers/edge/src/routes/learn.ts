@@ -4,6 +4,7 @@ import {
   telemetryBatchSchema,
   updateProfileSchema,
   reviewSubmitSchema,
+  calibrationSubmitSchema,
   applyLeitnerReview,
   buildSkillDelta,
   computeStreak,
@@ -313,6 +314,7 @@ export async function handleHome(
         stageIndex: stage.order,
         totalStages: map.stages.length,
         criteria: stage.criteria,
+        calibrated: Boolean(map.calibration),
       },
       cycle: cycleDto,
       lesson: currentReady ? toLessonDto(current!) : null,
@@ -828,6 +830,177 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// آزمون کالیبراسیون — سطح برآوردی مستقل از خوداظهاری
+// ═════════════════════════════════════════════════════════════════════
+
+const LEVEL_RANK: Record<string, number> = {
+  ZERO: 0, A1: 1, A2: 2, B1: 3, B2: 4, C1: 5, C2: 6,
+};
+
+function levelFromScore(scorePct: number): string {
+  if (scorePct < 40) return 'A0';
+  if (scorePct < 60) return 'A1';
+  if (scorePct < 75) return 'A2';
+  if (scorePct < 90) return 'B1';
+  return 'B2';
+}
+
+/** GET/POST /gate?action=calibration-test */
+export async function handleCalibrationTest(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const map = await ensureLearningMap(r, user);
+  if (map.calibration) {
+    return jsonSuccess({ alreadyCalibrated: true, calibration: map.calibration }, requestId, env);
+  }
+
+  const input = await buildGenerationInput(r, user, 1);
+  if (!input) {
+    return jsonError('INTERNAL_ERROR', 'could not build input', requestId, env, 500);
+  }
+
+  const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
+  const providerRows = await r.listActiveAiProviders();
+  const chain = await resolveProviderChain(providerRows, env, 'TEXT');
+  const engine = new AiEngine(env, chain, 'TEXT');
+  if (!engine.hasAnyProvider) {
+    return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
+  }
+
+  const res = await engine.generateCalibration(input);
+  if (!res.test?.items?.length) {
+    return jsonError('INTERNAL_ERROR', 'calibration generation failed', requestId, env, 502);
+  }
+
+  return jsonSuccess(
+    {
+      alreadyCalibrated: false,
+      items: res.test.items.map((it) => ({
+        term: it.term,
+        options: it.options,
+        correctIndex: it.correctIndex,
+      })),
+    },
+    requestId,
+    env
+  );
+}
+
+/** POST /gate?action=calibration-submit */
+export async function handleCalibrationSubmit(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const parsed = calibrationSubmitSchema.safeParse(await readJson(request));
+  if (!parsed.success) {
+    return jsonError('VALIDATION_ERROR', 'invalid calibration payload', requestId, env, 400);
+  }
+
+  const answers = parsed.data.answers;
+  const correct = answers.filter((a) => a.isCorrect).length;
+  const scorePct = Math.round((correct / answers.length) * 100);
+  const estimated = levelFromScore(scorePct);
+  const selfReported = String(user.skill_level ?? 'ZERO');
+  const selfRank = LEVEL_RANK[selfReported] ?? 0;
+  const estRank = LEVEL_RANK[estimated] ?? 1;
+  const mismatch = Math.abs(estRank - selfRank) >= 2;
+
+  let map = await ensureLearningMap(r, user);
+
+  map = {
+    ...map,
+    calibration: {
+      takenAt: new Date().toISOString(),
+      scorePct,
+      answers: answers.length,
+      selfReported,
+      estimated,
+      mismatch,
+      confidence: answers.length >= 10 ? 0.8 : 0.5,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+
+  /**
+   * ⚠️ جبران پیش‌نیاز با شواهد: اگر نتیجهٔ آزمون خیلی بالا باشد، مرحلهٔ ۱
+   * (و برای امتیاز بالاتر، مرحلهٔ ۲) با **شاهد کالیبراسیون** تأیید می‌شود.
+   * این تنها راه مجاز «پرش از مرحله» است و در history ثبت می‌شود.
+   */
+  const skipTo = scorePct >= 90 ? 3 : scorePct >= 80 ? 2 : 1;
+  if (skipTo > 1) {
+    const nowIso = new Date().toISOString();
+    map = {
+      ...map,
+      currentStageId: map.stages[skipTo - 1]?.id ?? map.currentStageId,
+      stages: map.stages.map((st) =>
+        st.order < skipTo
+          ? { ...st, status: 'MASTERED' as const, masteredAt: nowIso }
+          : st.order === skipTo
+            ? { ...st, status: 'IN_PROGRESS' as const }
+            : st
+      ),
+      history: [
+        ...map.history,
+        {
+          at: nowIso,
+          kind: 'STAGE_MASTERED' as const,
+          from: map.stages[0]?.id ?? null,
+          to: map.stages[skipTo - 1]?.id ?? null,
+          reason: `کالیبراسیون ${scorePct}٪ (${estimated}) — ${skipTo - 1} مرحله با شاهد آزمون تأیید شد`,
+        },
+      ],
+    };
+
+    map = appendDecision(map, {
+      scope: 'STAGE',
+      ruleId: 'CALIBRATION_SKIP_V1',
+      inputs: {
+        scorePct,
+        answers: answers.length,
+        estimated,
+        selfReported,
+        skippedStages: skipTo - 1,
+      },
+      output: `START_AT_STAGE_${skipTo}`,
+      reason: `آزمون کالیبراسیون ${scorePct}٪ داد؛ شروع از مرحلهٔ ${skipTo} با شاهد آزمون`,
+      confidence: answers.length >= 10 ? 0.8 : 0.5,
+    });
+  } else {
+    map = appendDecision(map, {
+      scope: 'STAGE',
+      ruleId: 'CALIBRATION_BASELINE_V1',
+      inputs: { scorePct, answers: answers.length, estimated, selfReported },
+      output: 'START_AT_STAGE_1',
+      reason: `آزمون کالیبراسیون ${scorePct}٪ داد؛ شروع از مرحلهٔ ۱`,
+      confidence: answers.length >= 10 ? 0.8 : 0.5,
+    });
+  }
+
+  await r.saveLearningMap(user.id, map);
+
+  return jsonSuccess(
+    { estimated, scorePct, mismatch, selfReported, stage: map.currentStageId },
+    requestId,
+    env
+  );
 }
 
 // ═════════════════════════════════════════════════════════════════════

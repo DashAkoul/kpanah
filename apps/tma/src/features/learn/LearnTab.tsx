@@ -5,6 +5,7 @@ import { Roadmap } from './Roadmap';
 import { LessonCard } from './LessonCard';
 import { useHome, useRetryCycle, useDueReviews } from '../../hooks/useApi';
 import { ReviewSession } from './ReviewSession';
+import { CalibrationFlow } from './CalibrationFlow';
 import { useSessionStore } from '../../store/session';
 import { useUiStore } from '../../store/ui';
 
@@ -25,6 +26,7 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const retry = useRetryCycle();
   const due = useDueReviews();
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
   const showToast = useUiStore((s) => s.showToast);
 
   /**
@@ -178,6 +180,33 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
             </Button>
           </div>
         </Card>
+      )}
+
+      {/* کالیبراسیون — سطح برآوردی */}
+      {data.map && !data.map.calibrated && (
+        <Card className="border-brand-200 bg-brand-50/40">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-text">🎯 {t('calibration.title')}</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-text-hint">
+                {t('calibration.subtitle')}
+              </p>
+            </div>
+            <Button size="sm" onClick={() => setCalibrationOpen(true)}>
+              {t('calibration.start')}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {calibrationOpen && (
+        <CalibrationFlow
+          onClose={() => setCalibrationOpen(false)}
+          onDone={() => {
+            setCalibrationOpen(false);
+            void refetch();
+          }}
+        />
       )}
 
       {/* نقشهٔ ثابت — مرحلهٔ جاری */}

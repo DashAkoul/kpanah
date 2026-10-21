@@ -73,6 +73,16 @@ export interface HomeData {
   nextUnlockAt?: string | null;
   /** بالاترین بخشِ تکمیل‌شدهٔ درس جاری (سرور) */
   partsDone?: number;
+  /** مرحلهٔ جاری نقشهٔ ثابت */
+  map?: {
+    version: number;
+    outcome: string;
+    currentStage: string;
+    objective: string;
+    stageIndex: number;
+    totalStages: number;
+    criteria: { minAccuracy: number; minMasteredTerms: number; maxWeakTerms: number };
+  } | null;
   /** پیکربندی تخفیف سکه (تنظیم مدیر) */
   coinDiscount?: { coinsPerStep?: number; percentPerStep?: number } | null;
   /** دلیل خطا وقتی تولید چرخه شکست خورده (فقط برای FAILED) */

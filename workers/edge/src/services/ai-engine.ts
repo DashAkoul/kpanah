@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import {
   calibrationTestSchema,
+  freeWriteResultSchema,
   generatedCycleSchema,
   generatedLessonSchema,
   lessonSkeletonSchema,
@@ -202,6 +203,64 @@ export class AiEngine {
     );
 
     return { test: r.value, attempts: r.attempts, model: r.model, totalMs: r.totalMs };
+  }
+
+  /**
+   * ارزیابی پاسخ آزاد کاربر (نوشتاری).
+   *
+   * ⚠️ این تنها جایی است که «ارزیاب» یک مدل است — به همین دلیل:
+   *  • فقط روی یک جمله اجرا می‌شود (هزینهٔ کم)
+   *  • خروجی ساختاریافته است (verdict/score/feedback)
+   *  • `PARTIAL` وجود دارد تا «درست اما ناقص» با «غلط» یکی نشود
+   */
+  async evaluateFreeWrite(input: {
+    targetLanguage: string;
+    uiLanguage: string;
+    term: string;
+    prompt: string;
+    answer: string;
+    level?: string;
+  }): Promise<{
+    result: { verdict: 'CORRECT' | 'PARTIAL' | 'WRONG'; score: number; feedback: string; corrected?: string } | null;
+    attempts: AiAttempt[];
+  }> {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        verdict: { type: 'string', enum: ['CORRECT', 'PARTIAL', 'WRONG'] },
+        score: { type: 'number', minimum: 0, maximum: 1 },
+        feedback: { type: 'string' },
+        corrected: { type: 'string' },
+      },
+      required: ['verdict', 'score', 'feedback'],
+    };
+
+    const r = await this.runChain(
+      freeWriteResultSchema,
+      [
+        `You are a strict but fair language examiner.`,
+        `Target language: ${input.targetLanguage}. Learner UI language: ${input.uiLanguage}.`,
+        `Level: ${input.level ?? 'A1'}.`,
+        `The learner had to write ONE sentence using the term "${input.term}".`,
+        `Task given to the learner: ${input.prompt}`,
+        ``,
+        `Rules:`,
+        `- Accept any correct sentence that uses the term with the right meaning, even if`,
+        `  worded differently from the sample. Different valid wording is NOT an error.`,
+        `- Ignore capitalisation, trailing punctuation and harmless typos.`,
+        `- CORRECT: meaning right and grammar acceptable at this level.`,
+        `- PARTIAL: the term is used but the sentence has a real grammar/word-order error.`,
+        `- WRONG: the term is missing, or used with the wrong meaning.`,
+        `- "feedback" must be ONE short sentence in ${input.uiLanguage}, addressed to the learner,`,
+        `  specific to what they wrote (not generic praise).`,
+        `- "corrected": if not CORRECT, give the minimal corrected version in the target language.`,
+      ].join('\n'),
+      `Learner wrote: "${input.answer}"`,
+      'free-write',
+      jsonSchema
+    );
+
+    return { result: r.value, attempts: r.attempts };
   }
 
   async generateLesson(
@@ -846,6 +905,10 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `  example (identical to "example"); the other two use the SAME term wrongly`,
     `  (wrong collocation, wrong register, or wrong meaning in context).`,
     `  Set "correctIndex" accordingly.`,
+    `- "freeWrite" (on at least 2 items per lesson): a short writing task —`,
+    `  "prompt" in ${input.user.uiLanguage} telling the learner to write ONE sentence using`,
+    `  the term, "mustUse" = the exact term, "minWords" 3-6, and "sampleAnswer"`,
+    `  (one natural sentence). Keep it doable at this level.`,
     `- "substitution": "base" is a short frame containing ___ ; "slots" has exactly 3`,
     `  completions of which EXACTLY ONE is correct (grammatical AND appropriate).`,
     `  The two wrong ones must look similar (same length/register) so the answer is not`,
@@ -1129,6 +1192,16 @@ function patternDrillItemJson(): Record<string, unknown> {
           correctIndex: { type: 'integer', minimum: 0, maximum: 2 },
         },
         required: ['base', 'slots', 'correctIndex'],
+      },
+      freeWrite: {
+        type: 'object',
+        properties: {
+          prompt: jsonStr('Writing task in the learner UI language'),
+          mustUse: jsonStr('The exact term that must appear'),
+          minWords: { type: 'integer', minimum: 3, maximum: 6 },
+          sampleAnswer: jsonStr('One natural sample sentence'),
+        },
+        required: ['prompt', 'mustUse', 'minWords'],
       },
     },
     required: ['term', 'meaning', 'example', 'meaningOptions', 'exampleOptions'],

@@ -127,6 +127,11 @@ export default {
       finishedBody: '{{correct}} of {{total}} correct.',
     },
     lesson: {
+      partial: 'Almost — one fix needed',
+      freeWrite: 'Your turn: write one sentence',
+      freeWritePlaceholder: 'Write your sentence here…',
+      freeWriteHint: 'Your sentence must contain “{{term}}”',
+      writeEvalFailed: 'Evaluation failed; your sentence was saved. Try again later.',
       finishing: 'Moving on…',
       saving: 'Saving…',
       part1Done: 'Part 1 complete 🎉',

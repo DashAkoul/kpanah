@@ -155,6 +155,13 @@ export interface PatternDrillItem {
   meaningOptions?: { options: string[]; correctIndex: number };
   /** گزینه‌های مثال (۱ درست + ۲ انحرافی) */
   exampleOptions?: { options: string[]; correctIndex: number };
+  /** تمرین تولید آزاد (نوشتاری) */
+  freeWrite?: {
+    prompt: string;
+    mustUse: string;
+    minWords: number;
+    sampleAnswer?: string;
+  };
   /** الگوی جایگزینی: جمله پایه + اسلات‌های قابل تعویض */
   substitution?: {
     base: string;

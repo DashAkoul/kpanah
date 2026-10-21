@@ -152,6 +152,20 @@ export const patternDrillItemSchema = z.object({
   /** گزینه‌های مثال — کاربر مثال درست را انتخاب می‌کند */
   exampleOptions: drillChoiceSchema.optional(),
   /**
+   * تمرین تولید آزاد — کاربر خودش جمله می‌سازد.
+   * ⚠️ تنها بخشی از درس که پاسخش با AI ارزیابی می‌شود (نه تطبیق رشته).
+   */
+  freeWrite: z
+    .object({
+      prompt: nonEmpty(300),
+      /** واژه‌ای که باید در جمله به کار برود */
+      mustUse: nonEmpty(80),
+      minWords: z.number().int().min(2).max(20),
+      /** پاسخ نمونه (فقط برای بازخورد، نه تطبیق) */
+      sampleAnswer: z.string().max(400).optional(),
+    })
+    .optional(),
+  /**
    * box به‌صورت literal union تعریف می‌شود تا خروجی infer شده با
    * LeitnerBox در types مطابق باشد. مدل این مقدار را تعیین نمی‌کند،
    * بلکه موتور تطبیقی ما آن را هنگام رندر تزریق می‌کند.
@@ -473,6 +487,23 @@ export const calibrationSubmitSchema = z.object({
     )
     .min(1)
     .max(20),
+});
+
+/** ارزیابی پاسخ آزاد — ورودی */
+export const freeWriteSubmitSchema = z.object({
+  term: nonEmpty(120),
+  prompt: nonEmpty(400),
+  answer: nonEmpty(400),
+  lessonId: z.string().uuid().optional(),
+});
+
+/** خروجی ارزیابی */
+export const freeWriteResultSchema = z.object({
+  verdict: z.enum(['CORRECT', 'PARTIAL', 'WRONG']),
+  /** 0..1 */
+  score: z.number().min(0).max(1),
+  feedback: z.string().max(600),
+  corrected: z.string().max(400).optional(),
 });
 
 export const completeLessonSchema = z.object({

@@ -460,6 +460,20 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** ارزیابی پاسخ آزاد (نوشتاری) */
+  evaluateFreeWrite: (body: {
+    term: string;
+    prompt: string;
+    answer: string;
+    lessonId?: string;
+  }) =>
+    callApi<{
+      verdict: 'CORRECT' | 'PARTIAL' | 'WRONG';
+      score: number;
+      feedback: string;
+      corrected?: string;
+    }>('evaluate-free-write', { method: 'POST', body }),
+
   /** آزمون کالیبراسیون (سطح برآوردی) */
   calibrationTest: () =>
     callApi<{

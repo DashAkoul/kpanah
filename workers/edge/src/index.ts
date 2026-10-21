@@ -24,6 +24,7 @@ import {
   handlePreviewDiscount,
   handleCalibrationTest,
   handleCalibrationSubmit,
+  handleEvaluateFreeWrite,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -426,6 +427,8 @@ async function dispatch(
       return handleCalibrationTest(request, context);
     case 'calibration-submit':
       return handleCalibrationSubmit(request, context);
+    case 'evaluate-free-write':
+      return handleEvaluateFreeWrite(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

@@ -6,7 +6,7 @@ import { Card, Button, ProgressBar } from '../../components/ui';
 import { useLessonSession } from '../../store/session';
 import { useSessionStore } from '../../store/session';
 import { haptic } from '../../lib/telegram';
-import { API_BASE } from '../../lib/api';
+import { API_BASE, api } from '../../lib/api';
 import { useAudio } from '../../hooks/useAudio';
 
 /**
@@ -26,7 +26,7 @@ import { useAudio } from '../../hooks/useAudio';
  *
  * Deliberately absent: any hint that a given day is an assessment.
  */
-type P1Step = 'meaning' | 'example' | 'reveal' | 'pattern';
+type P1Step = 'meaning' | 'example' | 'reveal' | 'pattern' | 'write';
 
 /** اولین مرحله‌ای که این آیتم پشتیبانی می‌کند */
 function firstStep(item: PatternDrillItem | undefined): P1Step {
@@ -42,7 +42,11 @@ function stepAfter(step: P1Step, item: PatternDrillItem | undefined): P1Step | n
   if (step === 'reveal') {
     // الگو فقط وقتی سؤال می‌شود که پاسخ درست مشخص باشد
     if (item?.substitution && item.substitution.correctIndex !== undefined) return 'pattern';
-    return null;
+    return item?.freeWrite ? 'write' : null;
+  }
+  if (step === 'pattern') {
+    // تولید آزاد بعد از الگو — اگر درس چنین تمرینی دارد
+    return item?.freeWrite ? 'write' : null;
   }
   return null;
 }
@@ -112,6 +116,14 @@ export function LessonPlayer({
 
   const [p1Selected, setP1Selected] = useState<number | null>(null);
   const [p1Checked, setP1Checked] = useState(false);
+  // تولید آزاد (نوشتاری)
+  const [writeText, setWriteText] = useState('');
+  const [writeBusy, setWriteBusy] = useState(false);
+  const [writeResult, setWriteResult] = useState<{
+    verdict: 'CORRECT' | 'PARTIAL' | 'WRONG';
+    feedback: string;
+    corrected?: string;
+  } | null>(null);
 
   /**
    * ⚠️ ادامه از همان‌جا که کاربر خارج شد.
@@ -175,6 +187,40 @@ export function LessonPlayer({
   const currentItem: PatternDrillItem | undefined = part1Items[itemIndex];
   const currentChoice = choiceFor(currentItem, p1Step);
 
+  /** ارسال پاسخ آزاد برای ارزیابی */
+  const submitFreeWrite = useCallback(async () => {
+    const fw = currentItem?.freeWrite;
+    if (!currentItem || !fw || writeText.trim().length < 3) return;
+    setWriteBusy(true);
+    try {
+      const res = await api.evaluateFreeWrite({
+        term: fw.mustUse || currentItem.term,
+        prompt: fw.prompt,
+        answer: writeText.trim(),
+        lessonId: lesson.id,
+      });
+      setWriteResult({
+        verdict: res.verdict,
+        feedback: res.feedback,
+        corrected: res.corrected,
+      });
+      session.recordAnswer({
+        itemId: `write-${itemIndex}`,
+        isCorrect: res.verdict === 'CORRECT',
+        linkedTerm: currentItem.term,
+        usedHint: false,
+      });
+      haptic(res.verdict === 'CORRECT' ? 'success' : 'warning');
+    } catch {
+      setWriteResult({
+        verdict: 'PARTIAL',
+        feedback: t('lesson.writeEvalFailed'),
+      });
+    } finally {
+      setWriteBusy(false);
+    }
+  }, [currentItem, writeText, lesson.id, itemIndex, session, t]);
+
   /** آیتم بعدی یا ورود به بخش ۲ */
   const advanceItem = useCallback(() => {
     if (itemIndex + 1 < part1Items.length) {
@@ -183,6 +229,8 @@ export function LessonPlayer({
       setP1Step(firstStep(next));
       setP1Selected(null);
       setP1Checked(false);
+      setWriteText('');
+      setWriteResult(null);
       session.markItemStart();
       return;
     }
@@ -216,6 +264,10 @@ export function LessonPlayer({
       setP1Step(next);
       setP1Selected(null);
       setP1Checked(false);
+      if (next === 'write') {
+        setWriteText('');
+        setWriteResult(null);
+      }
       session.markItemStart();
       return;
     }
@@ -344,6 +396,57 @@ export function LessonPlayer({
           />
         )}
 
+      {/* تولید آزاد */}
+      {p1Step === 'write' && currentItem?.freeWrite && (
+        <Card className="border-dashed">
+          <p className="mb-1 text-[11px] font-medium text-text-hint">
+            ✍️ {t('lesson.freeWrite')}
+          </p>
+          <p className="mb-2 text-sm font-semibold leading-relaxed text-text">
+            {currentItem.freeWrite.prompt}
+          </p>
+          <textarea
+            value={writeText}
+            onChange={(e) => setWriteText(e.target.value)}
+            disabled={Boolean(writeResult)}
+            rows={3}
+            dir="ltr"
+            placeholder={t('lesson.freeWritePlaceholder')}
+            className="target-text w-full rounded-xl border border-border bg-card p-3 text-sm text-text outline-none focus:border-brand-500"
+          />
+          <p className="mt-1 text-[10px] text-text-muted">
+            {t('lesson.freeWriteHint', { term: currentItem.freeWrite.mustUse })}
+          </p>
+
+          {writeResult && (
+            <div
+              className={clsx(
+                'mt-3 rounded-xl border p-3',
+                writeResult.verdict === 'CORRECT'
+                  ? 'border-success-500/30 bg-success-100/50'
+                  : writeResult.verdict === 'PARTIAL'
+                    ? 'border-warning-500/30 bg-warning-100/40'
+                    : 'border-danger-500/30 bg-danger-100/50'
+              )}
+            >
+              <p className="text-xs font-semibold text-text">
+                {writeResult.verdict === 'CORRECT'
+                  ? t('lesson.correct')
+                  : writeResult.verdict === 'PARTIAL'
+                    ? t('lesson.partial')
+                    : t('lesson.incorrect')}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-text">{writeResult.feedback}</p>
+              {writeResult.corrected && (
+                <p className="target-text mt-1 text-xs text-text-hint" dir="ltr">
+                  {writeResult.corrected}
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
         {part === 3 && story && (
           <StoryView
             story={story}
@@ -381,6 +484,10 @@ export function LessonPlayer({
         {part === 1 && currentItem && (
           <Part1Actions
             step={p1Step}
+            writeBusy={writeBusy}
+            writeDone={Boolean(writeResult)}
+            canSubmitWrite={writeText.trim().length >= 3}
+            onSubmitWrite={() => void submitFreeWrite()}
             hasChoice={Boolean(
               currentItem.meaningOptions ||
                 currentItem.exampleOptions ||
@@ -456,6 +563,10 @@ function Part1Actions({
   onCheck,
   onNext,
   onSelfAssess,
+  writeBusy = false,
+  writeDone = false,
+  canSubmitWrite = false,
+  onSubmitWrite,
 }: {
   step: P1Step;
   hasChoice: boolean;
@@ -464,8 +575,33 @@ function Part1Actions({
   onCheck: () => void;
   onNext: () => void;
   onSelfAssess: (knewIt: boolean) => void;
+  writeBusy?: boolean;
+  writeDone?: boolean;
+  canSubmitWrite?: boolean;
+  onSubmitWrite?: () => void;
 }) {
   const { t } = useTranslation();
+
+  // تولید آزاد: «ارزیابی» → بازخورد → «بعدی»
+  if (step === 'write') {
+    if (writeDone) {
+      return (
+        <Button fullWidth onClick={onNext}>
+          {t('common.next')}
+        </Button>
+      );
+    }
+    return (
+      <Button
+        fullWidth
+        disabled={!canSubmitWrite}
+        loading={writeBusy}
+        onClick={() => onSubmitWrite?.()}
+      >
+        {t('lesson.checkAnswer')}
+      </Button>
+    );
+  }
 
   // محتوای قدیمی (بدون گزینه و بدون پاسخ الگو) → خودارزیابی
   if (step === 'reveal' && !hasChoice) {

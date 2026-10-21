@@ -127,6 +127,11 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      partial: 'نزدیک بود — یک اصلاح لازم است',
+      freeWrite: 'نوبت تو: یک جمله بساز',
+      freeWritePlaceholder: 'جمله‌ات را اینجا بنویس…',
+      freeWriteHint: 'واژهٔ «{{term}}» باید در جمله باشد',
+      writeEvalFailed: 'ارزیابی انجام نشد؛ جمله‌ات ذخیره شد. بعداً دوباره تلاش کن.',
       finishing: 'در حال رفتن به مرحلهٔ بعد…',
       saving: 'در حال ثبت…',
       part1Done: 'بخش ۱ تمام شد 🎉',

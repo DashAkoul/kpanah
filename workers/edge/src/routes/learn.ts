@@ -5,6 +5,7 @@ import {
   updateProfileSchema,
   reviewSubmitSchema,
   calibrationSubmitSchema,
+  freeWriteSubmitSchema,
   applyLeitnerReview,
   buildSkillDelta,
   computeStreak,
@@ -830,6 +831,77 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// POST /gate?action=evaluate-free-write → ارزیابی پاسخ آزاد (نوشتاری)
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠️ تنها نقطه‌ای که ارزیابی با مدل انجام می‌شود.
+ * برای مهارِ هزینه: ورودی حداکثر ۴۰۰ کاراکتر و خروجی ساختاریافته است.
+ */
+export async function handleEvaluateFreeWrite(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const parsed = freeWriteSubmitSchema.safeParse(await readJson(request));
+  if (!parsed.success) {
+    return jsonError('VALIDATION_ERROR', 'invalid free-write payload', requestId, env, 400);
+  }
+
+  const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
+  const providerRows = await r.listActiveAiProviders();
+  const chain = await resolveProviderChain(providerRows, env, 'TEXT');
+  const engine = new AiEngine(env, chain, 'TEXT');
+  if (!engine.hasAnyProvider) {
+    return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
+  }
+
+  const res = await engine.evaluateFreeWrite({
+    targetLanguage: user.target_language,
+    uiLanguage: user.ui_language ?? 'fa',
+    term: parsed.data.term,
+    prompt: parsed.data.prompt,
+    answer: parsed.data.answer,
+    level: String(user.skill_level ?? 'A1'),
+  });
+
+  if (!res.result) {
+    return jsonError('INTERNAL_ERROR', 'evaluation failed', requestId, env, 502);
+  }
+
+  // ثبت شاهد یادگیری: پاسخ آزاد با حالت مشخص در تلمتری
+  try {
+    await r.insertTelemetry([
+      {
+        user_id: user.id,
+        lesson_id: parsed.data.lessonId ?? null,
+        cycle_id: null,
+        event_type: 'ANSWER',
+        item_id: `write:${parsed.data.term}`.slice(0, 60),
+        is_correct: res.result.verdict === 'CORRECT',
+        response_ms: null,
+        payload: {
+          mode: 'FREE_TEXT',
+          verdict: res.result.verdict,
+          score: res.result.score,
+          answer: parsed.data.answer.slice(0, 300),
+        },
+      },
+    ]);
+  } catch {
+    /* تلمتری best-effort */
+  }
+
+  return jsonSuccess(res.result, requestId, env);
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1673,7 +1745,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 7;
+export const LESSON_CONTENT_VERSION = 8;
 
 function cacheKeyFor(
   input: CycleGenerationInput,

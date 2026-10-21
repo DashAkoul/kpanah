@@ -768,6 +768,11 @@ export interface LearningMap {
     /** آیا اختلاف معنادار بود؟ */
     mismatch: boolean;
     confidence: number;
+    /** تفکیک مهارت — تشخیص ≠ شنیدن */
+    bySkill?: {
+      MEANING?: { correct: number; total: number };
+      LISTENING?: { correct: number; total: number };
+    };
   } | null;
 }
 

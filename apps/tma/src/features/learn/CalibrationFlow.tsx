@@ -5,8 +5,11 @@ import { Card, Button, ProgressBar } from '../../components/ui';
 import { Portal } from '../../components/Portal';
 import { api } from '../../lib/api';
 import { haptic } from '../../lib/telegram';
+import { useAudio } from '../../hooks/useAudio';
+import { useSessionStore } from '../../store/session';
 
 interface Item {
+  kind: 'MEANING' | 'LISTENING';
   term: string;
   options: string[];
   correctIndex: number;
@@ -27,12 +30,14 @@ export function CalibrationFlow({
   onDone: () => void;
 }) {
   const { t } = useTranslation();
+  const { play, loading: audioLoading } = useAudio();
+  const targetLanguage = useSessionStore((s) => s.user?.targetLanguage);
   const [items, setItems] = useState<Item[] | null>(null);
   const [error, setError] = useState(false);
   const [index, setIndex] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [answers, setAnswers] = useState<
-    { term: string; isCorrect: boolean; responseMs: number }[]
+    { term: string; isCorrect: boolean; responseMs: number; kind?: 'MEANING' | 'LISTENING' }[]
   >([]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
   const [result, setResult] = useState<{ estimated: string; scorePct: number } | null>(null);
@@ -63,7 +68,12 @@ export function CalibrationFlow({
     const isCorrect = choice === current.correctIndex;
     const next = [
       ...answers,
-      { term: current.term, isCorrect, responseMs: Math.min(600_000, Date.now() - startedAt) },
+      {
+        term: current.term,
+        isCorrect,
+        responseMs: Math.min(600_000, Date.now() - startedAt),
+        kind: current.kind,
+      },
     ];
     setAnswers(next);
 
@@ -136,10 +146,27 @@ export function CalibrationFlow({
           {current && !result && (
             <div className="space-y-4">
               <Card className="text-center">
-                <p className="text-[11px] text-text-hint">{t('calibration.question')}</p>
-                <h2 className="target-text mt-2 text-2xl font-bold text-text" dir="ltr">
-                  {current.term}
-                </h2>
+                {current.kind === 'LISTENING' ? (
+                  <>
+                    <p className="text-[11px] text-text-hint">{t('calibration.listenPrompt')}</p>
+                    <button
+                      type="button"
+                      onClick={() => void play(current.term, targetLanguage ?? 'en')}
+                      disabled={audioLoading}
+                      className="mx-auto mt-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand-50 text-2xl text-brand-600 transition active:scale-95"
+                    >
+                      {audioLoading ? '⏳' : '🔊'}
+                    </button>
+                    <p className="mt-2 text-[10px] text-text-muted">{t('calibration.replayHint')}</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[11px] text-text-hint">{t('calibration.question')}</p>
+                    <h2 className="target-text mt-2 text-2xl font-bold text-text" dir="ltr">
+                      {current.term}
+                    </h2>
+                  </>
+                )}
               </Card>
 
               <div className="space-y-2">
@@ -151,6 +178,7 @@ export function CalibrationFlow({
                     disabled={selected !== null || busy}
                     className={clsx(
                       'w-full rounded-xl border p-3 text-start text-sm transition active:scale-[0.99]',
+                      current.kind === 'LISTENING' && 'target-text',
                       selected === i
                         ? i === current.correctIndex
                           ? 'border-success-500 bg-success-100'

@@ -52,6 +52,8 @@ export default {
       change: 'Change',
     },
     calibration: {
+      listenPrompt: 'Which word did you hear?',
+      replayHint: 'You can replay it',
       title: 'Quick level check',
       subtitle: '10 short questions so your path starts at the right level — about 2 minutes',
       start: 'Start check',

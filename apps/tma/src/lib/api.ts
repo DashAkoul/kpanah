@@ -464,7 +464,12 @@ export const api = {
   calibrationTest: () =>
     callApi<{
       alreadyCalibrated: boolean;
-      items?: { term: string; options: string[]; correctIndex: number }[];
+      items?: {
+        kind: 'MEANING' | 'LISTENING';
+        term: string;
+        options: string[];
+        correctIndex: number;
+      }[];
       calibration?: unknown;
     }>('calibration-test'),
 

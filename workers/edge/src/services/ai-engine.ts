@@ -148,7 +148,14 @@ export class AiEngine {
    * شاهدی. این آزمون فقط **نقطهٔ شروع** را تنظیم می‌کند، نه نمره.
    */
   async generateCalibration(input: CycleGenerationInput): Promise<{
-    test: { items: { term: string; meaning: string; options: string[]; correctIndex: number }[] } | null;
+    test: {
+      items: {
+        kind: 'MEANING' | 'LISTENING';
+        term: string;
+        options: string[];
+        correctIndex: number;
+      }[];
+    } | null;
     attempts: AiAttempt[];
     model: string;
     totalMs: number;
@@ -163,12 +170,12 @@ export class AiEngine {
           items: {
             type: 'object',
             properties: {
+              kind: { type: 'string', enum: ['MEANING', 'LISTENING'] },
               term: { type: 'string' },
-              meaning: { type: 'string' },
               options: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'string' } },
               correctIndex: { type: 'integer', minimum: 0, maximum: 2 },
             },
-            required: ['term', 'meaning', 'options', 'correctIndex'],
+            required: ['kind', 'term', 'options', 'correctIndex'],
           },
         },
       },
@@ -180,10 +187,13 @@ export class AiEngine {
       [
         `You build a short placement test.`,
         `Target language: ${input.user.targetLanguage}. Learner UI language: ${input.user.uiLanguage}.`,
-        `Produce exactly 10 vocabulary items ordered from very easy (A1) to upper-intermediate (B1).`,
-        `For each: "term" in the target language, "meaning" in ${input.user.uiLanguage}, and exactly`,
-        `3 options in ${input.user.uiLanguage} (one true meaning + two plausible distractors).`,
-        `Set "correctIndex" to the index of the true meaning. Never repeat a term.`,
+        `Produce exactly 10 items ordered from very easy (A1) to upper-intermediate (B1):`,
+        `7 with "kind":"MEANING" and 3 with "kind":"LISTENING" (interleave them, do not group).`,
+        `For MEANING: "term" in the target language and 3 options in ${input.user.uiLanguage}`,
+        `  (one true meaning + two plausible distractors).`,
+        `For LISTENING: the learner HEARS the term, so the 3 options must be three DIFFERENT terms`,
+        `  in the target language, one of which is exactly "term"; do not include meanings.`,
+        `Set "correctIndex" to the index of the correct option. Never repeat a term.`,
         `Return only the JSON object.`,
       ].join('\n'),
       `Build the 10-item placement test for ${input.user.targetLanguage}.`,

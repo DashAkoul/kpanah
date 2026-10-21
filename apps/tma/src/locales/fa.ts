@@ -52,6 +52,8 @@ export default {
       change: 'تغییر',
     },
     calibration: {
+      listenPrompt: 'کدام واژه را شنیدی؟',
+      replayHint: 'می‌توانی دوباره پخش کنی',
       title: 'سنجش سطح اولیه',
       subtitle: '۱۰ سؤال کوتاه تا مسیر از سطح درست تو شروع شود — حدود ۲ دقیقه',
       start: 'شروع سنجش',

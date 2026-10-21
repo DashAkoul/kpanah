@@ -865,6 +865,19 @@ export async function handleCalibrationTest(
     return jsonSuccess({ alreadyCalibrated: true, calibration: map.calibration }, requestId, env);
   }
 
+  /**
+   * کش مشترک آزمون: برای هر (زبان هدف، زبان رابط) فقط **یک بار** ساخته
+   * می‌شود. ⚠️ نسخه در کلید هست تا تغییر اسکیما کش قدیمی را باطل کند.
+   */
+  const cacheKey = `calib:${user.target_language}:${user.ui_language ?? 'fa'}:v2`;
+  const cached = (await r.getCachedContent('LESSON', cacheKey)) as
+    | { items?: { kind: 'MEANING' | 'LISTENING'; term: string; options: string[]; correctIndex: number }[] }
+    | null;
+
+  if (cached?.items?.length) {
+    return jsonSuccess({ alreadyCalibrated: false, items: cached.items }, requestId, env);
+  }
+
   const input = await buildGenerationInput(r, user, 1);
   if (!input) {
     return jsonError('INTERNAL_ERROR', 'could not build input', requestId, env, 500);
@@ -883,18 +896,16 @@ export async function handleCalibrationTest(
     return jsonError('INTERNAL_ERROR', 'calibration generation failed', requestId, env, 502);
   }
 
-  return jsonSuccess(
-    {
-      alreadyCalibrated: false,
-      items: res.test.items.map((it) => ({
-        term: it.term,
-        options: it.options,
-        correctIndex: it.correctIndex,
-      })),
-    },
-    requestId,
-    env
-  );
+  const items = res.test.items.map((it) => ({
+    kind: it.kind,
+    term: it.term,
+    options: it.options,
+    correctIndex: it.correctIndex,
+  }));
+
+  await r.putCachedContent('LESSON', cacheKey, user.target_language, { items });
+
+  return jsonSuccess({ alreadyCalibrated: false, items }, requestId, env);
 }
 
 /** POST /gate?action=calibration-submit */
@@ -917,6 +928,16 @@ export async function handleCalibrationSubmit(
   const answers = parsed.data.answers;
   const correct = answers.filter((a) => a.isCorrect).length;
   const scorePct = Math.round((correct / answers.length) * 100);
+
+  // تفکیک مهارت: تشخیص واژه از شنیدن جدا سنجیده می‌شود
+  const bySkill: Record<string, { correct: number; total: number }> = {};
+  for (const a of answers) {
+    const key = a.kind ?? 'MEANING';
+    const cur = bySkill[key] ?? { correct: 0, total: 0 };
+    cur.total += 1;
+    if (a.isCorrect) cur.correct += 1;
+    bySkill[key] = cur;
+  }
   const estimated = levelFromScore(scorePct);
   const selfReported = String(user.skill_level ?? 'ZERO');
   const selfRank = LEVEL_RANK[selfReported] ?? 0;
@@ -935,6 +956,7 @@ export async function handleCalibrationSubmit(
       estimated,
       mismatch,
       confidence: answers.length >= 10 ? 0.8 : 0.5,
+      bySkill,
     },
     updatedAt: new Date().toISOString(),
   };

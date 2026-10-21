@@ -448,8 +448,10 @@ export const updateProfileSchema = z.object({
  */
 export const calibrationItemSchema = z
   .object({
+    /** MEANING = معنی واژه؛ LISTENING = کدام واژه را شنیدی */
+    kind: z.enum(['MEANING', 'LISTENING']),
     term: nonEmpty(120),
-    meaning: nonEmpty(200),
+    meaning: z.string().max(200).optional(),
     options: z.array(nonEmpty(200)).min(3).max(3),
     correctIndex: z.number().int().min(0).max(2),
   })
@@ -466,6 +468,7 @@ export const calibrationSubmitSchema = z.object({
         term: nonEmpty(120),
         isCorrect: z.boolean(),
         responseMs: z.number().int().min(0).max(600_000),
+        kind: z.enum(['MEANING', 'LISTENING']).optional(),
       })
     )
     .min(1)

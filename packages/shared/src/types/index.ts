@@ -712,6 +712,26 @@ export interface MapStage {
   masteredAt?: string | null;
 }
 
+/**
+ * ثبت «چرا این تصمیم گرفته شد» — لازمهٔ ممیزی موتور تطبیقی.
+ * ⚠️ بدون این، هیچ تصمیمی قابل توضیح یا بازتولید نیست.
+ */
+export interface DecisionRecord {
+  id: string;
+  at: string;
+  scope: 'CYCLE' | 'STAGE' | 'REVIEW' | 'CONTENT';
+  /** قاعده‌ای که اعمال شد (شناسهٔ ثابت و قابل جست‌وجو) */
+  ruleId: string;
+  /** ورودی‌های مؤثر (عدد و مقدار، نه متن آزاد) */
+  inputs: Record<string, number | string | boolean | null>;
+  /** اقدام نهایی */
+  output: string;
+  /** توضیح انسانی */
+  reason: string;
+  /** 0..1 — سطح اطمینان */
+  confidence: number;
+}
+
 export interface LearningMap {
   id: string;
   version: number;
@@ -734,6 +754,8 @@ export interface LearningMap {
   }[];
   /** موارد نقض قاعده هنگام تولید محتوا */
   violations: { at: string; cycleId: string; rule: string; detail: string }[];
+  /** سابقهٔ تصمیم‌های موتور تطبیقی (آخرین ۲۰۰ مورد) */
+  decisions?: DecisionRecord[];
 }
 
 export interface ProgressDashboard {

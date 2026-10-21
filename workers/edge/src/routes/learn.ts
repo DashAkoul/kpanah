@@ -32,9 +32,11 @@ import type {
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import {
+  appendDecision,
   buildLearningMap,
   currentStage,
   evaluateStage,
+  MIN_EVIDENCE_ANSWERS,
   validateLessonAgainstMap,
 } from '../services/learning-map';
 import {
@@ -644,7 +646,7 @@ export async function handleCompleteLesson(
    */
   if (allDone) {
     try {
-      const map = await ensureLearningMap(r, user);
+      let map = await ensureLearningMap(r, user);
       const cycleTelemetry = await r.getTelemetryForCycle(lesson.cycle_id);
       const cycleAnswers = cycleTelemetry.filter((t) => t.event_type === 'ANSWER');
       const accuracyPct = cycleAnswers.length
@@ -654,13 +656,48 @@ export async function handleCompleteLesson(
         : 0;
 
       const lex = await r.getLexicalItems(user.id, user.target_language);
-      const evaluated = evaluateStage(map, {
-        accuracyPct,
-        masteredTerms: lex.filter((l) => l.mastered).length,
-        weakTerms: lex.filter((l) => l.box <= 2 || l.lapses > 0).length,
-      });
+      const masteredTerms = lex.filter((l) => l.mastered).length;
+      const weakTerms = lex.filter((l) => l.box <= 2 || l.lapses > 0).length;
+      const stage = currentStage(map);
 
-      await r.saveLearningMap(user.id, evaluated.map);
+      /**
+       * ⚠️ قاعدهٔ «اطلاعات کافی نیست»: با کمتر از ۱۰ پاسخ، شواهد برای تأیید
+       * تسلط کافی نیست و مرحله **ارتقا نمی‌یابد** (حتی اگر دقت ۱۰۰٪ باشد).
+       */
+      if (cycleAnswers.length < MIN_EVIDENCE_ANSWERS) {
+        map = appendDecision(map, {
+          scope: 'STAGE',
+          ruleId: 'INSUFFICIENT_EVIDENCE_V1',
+          inputs: {
+            answers: cycleAnswers.length,
+            required: MIN_EVIDENCE_ANSWERS,
+            stage: stage.id,
+          },
+          output: 'NO_ADVANCE',
+          reason: `فقط ${cycleAnswers.length} پاسخ ثبت شده؛ حداقل ${MIN_EVIDENCE_ANSWERS} لازم است`,
+          confidence: 0.2,
+        });
+      } else {
+        const evaluated = evaluateStage(map, { accuracyPct, masteredTerms, weakTerms });
+        map = appendDecision(evaluated.map, {
+          scope: 'STAGE',
+          ruleId: 'STAGE_CRITERIA_V1',
+          inputs: {
+            stage: stage.id,
+            accuracyPct,
+            masteredTerms,
+            weakTerms,
+            minAccuracy: stage.criteria.minAccuracy,
+            minMasteredTerms: stage.criteria.minMasteredTerms,
+            maxWeakTerms: stage.criteria.maxWeakTerms,
+          },
+          output: evaluated.advanced ? 'STAGE_ADVANCED' : 'STAY_IN_STAGE',
+          reason: evaluated.reason,
+          confidence: 0.9,
+        });
+      }
+
+      await r.saveLearningMap(user.id, map);
     } catch {
       /* best-effort: خطای نقشه نباید تکمیل درس را بشکند */
     }
@@ -2192,6 +2229,29 @@ async function ensureLessonContent(
     }
   }
 
+  // ثبت تصمیم «محتوای این روز بر چه مبنایی ساخته شد»
+  if (mapForCheck) {
+    const prof = dayProfile(day.dayNumber);
+    await r.saveLearningMap(
+      input.user.id,
+      appendDecision(mapForCheck, {
+        scope: 'CONTENT',
+        ruleId: 'DAY_PROFILE_V1',
+        inputs: {
+          day: day.dayNumber,
+          phase: prof.phase,
+          itemsMax: prof.items.max,
+          part2Max: prof.part2.max,
+          newItemRatio: prof.newItemRatio,
+          stage: mapForCheck.currentStageId,
+        },
+        output: 'LESSON_GENERATED',
+        reason: `روز ${day.dayNumber} با پروفایل ${prof.phase} و مرحلهٔ ${mapForCheck.currentStageId}`,
+        confidence: 1,
+      })
+    );
+  }
+
   await r.putCachedContent('LESSON', key, input.user.targetLanguage, aligned);
   return aligned;
 }
@@ -2668,6 +2728,8 @@ export async function handleDebugDelta(
   const telemetry = cycle ? await r.getTelemetryForCycle(cycle.id) : [];
   const lexical = await r.getLexicalItems(user.id, user.target_language);
 
+  const debugMap = await r.getLearningMap(user.id);
+
   const delta: SkillDelta = buildSkillDelta({
     events: telemetry.map((t) => ({
       eventType: t.event_type,
@@ -2685,5 +2747,25 @@ export async function handleDebugDelta(
     })),
   });
 
-  return jsonSuccess({ delta, weakTerms: delta.weakTerms as WeakTerm[] }, requestId, env);
+  return jsonSuccess(
+    {
+      delta,
+      weakTerms: delta.weakTerms as WeakTerm[],
+      map: debugMap
+        ? {
+            version: debugMap.version,
+            currentStage: debugMap.currentStageId,
+            stages: debugMap.stages.map((st) => ({
+              id: st.id,
+              status: st.status,
+              criteria: st.criteria,
+            })),
+            violations: debugMap.violations.slice(-20),
+          }
+        : null,
+      decisions: (debugMap?.decisions ?? []).slice(-30),
+    },
+    requestId,
+    env
+  );
 }

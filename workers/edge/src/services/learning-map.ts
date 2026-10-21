@@ -1,9 +1,34 @@
 import type {
+  DecisionRecord,
   GeneratedLesson,
   LearningMap,
   MapStage,
   StageCriteria,
 } from '@kpanah/shared';
+
+/** حداکثر تصمیم‌های نگه‌داری‌شده در نقشه (جلوگیری از رشد بی‌پایان) */
+const MAX_DECISIONS = 200;
+
+/** حداقل تعداد پاسخ برای این‌که شواهد «کافی» تلقی شود */
+export const MIN_EVIDENCE_ANSWERS = 10;
+
+/**
+ * افزودن یک تصمیم به نقشه.
+ * ⚠️ هر تصمیم باید `ruleId` ثابت داشته باشد تا قابل بازتولید و جست‌وجو باشد.
+ */
+export function appendDecision(
+  map: LearningMap,
+  decision: Omit<DecisionRecord, 'id' | 'at'>,
+  now: Date = new Date()
+): LearningMap {
+  const record: DecisionRecord = {
+    id: `d-${now.getTime()}-${(map.decisions?.length ?? 0) + 1}`,
+    at: now.toISOString(),
+    ...decision,
+  };
+  const list = [...(map.decisions ?? []), record].slice(-MAX_DECISIONS);
+  return { ...map, decisions: list, updatedAt: record.at };
+}
 
 /**
  * «نقشهٔ ثابت، اجرای تطبیقی» — قلب معماری.

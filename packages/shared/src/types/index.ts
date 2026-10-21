@@ -325,6 +325,14 @@ export interface CycleGenerationInput {
     targetLanguage: SupportedTargetLanguage;
     /** بودجهٔ زمانی روزانهٔ کاربر (دقیقه) — اندازهٔ درس را تعیین می‌کند */
     dailyMinutes?: number | null;
+    /** مرحلهٔ جاری نقشه — مرجع تولید محتوا */
+    stage?: {
+      id: string;
+      title: string;
+      objective: string;
+      skills: string[];
+      minAccuracy: number;
+    } | null;
   };
   cycleNumber: number;
   delta: SkillDelta;
@@ -660,6 +668,72 @@ export interface WordListEntry {
   box: number;
   lapses: number;
   nextReviewAt: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// نقشهٔ اصلی یادگیری (Learning Map)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * «نقشهٔ ثابت، اجرای تطبیقی».
+ *
+ * ⚠️ این ساختار **مرجع** است: چرخه‌ها و درس‌ها اجرای آن‌اند. تغییر داده‌های
+ * عملکردی فقط `status` مراحل را عوض می‌کند، نه خودِ نقشه.
+ */
+export type MapStageStatus = 'PLANNED' | 'IN_PROGRESS' | 'NEEDS_WORK' | 'MASTERED';
+
+/** معیار عبور از مرحله — **قبل** از اجرا تعیین می‌شود */
+export interface StageCriteria {
+  /** حداقل دقت پاسخ‌ها در چرخه (درصد) */
+  minAccuracy: number;
+  /** حداقل تعداد واژه در جعبهٔ ۳ به بالا */
+  minMasteredTerms: number;
+  /** حداکثر واژهٔ ضعیف مجاز در پایان مرحله */
+  maxWeakTerms: number;
+}
+
+export interface MapStage {
+  id: string;
+  order: number;
+  title: string;
+  titleUi: string;
+  /** هدف قابل‌مشاهده (چه کاری کاربر می‌تواند انجام دهد) */
+  objective: string;
+  /** همان هدف به زبان رابط کاربر */
+  objectiveUi: string;
+  /** مهارت‌های هدف این مرحله */
+  skills: string[];
+  /** شناسهٔ مراحل پیش‌نیاز */
+  prerequisites: string[];
+  criteria: StageCriteria;
+  status: MapStageStatus;
+  /** برآورد تعداد چرخه */
+  estimatedCycles: number;
+  masteredAt?: string | null;
+}
+
+export interface LearningMap {
+  id: string;
+  version: number;
+  goal: string;
+  targetLanguage: string;
+  uiLanguage: string;
+  /** نتیجهٔ عملی نهایی که کاربر می‌خواهد به آن برسد */
+  outcome: string;
+  createdAt: string;
+  updatedAt: string;
+  stages: MapStage[];
+  currentStageId: string;
+  /** سابقهٔ رسمی تغییرات نقشه (نه تغییر خودکار) */
+  history: {
+    at: string;
+    kind: 'CREATED' | 'STAGE_MASTERED' | 'REVISED';
+    from?: string | null;
+    to?: string | null;
+    reason: string;
+  }[];
+  /** موارد نقض قاعده هنگام تولید محتوا */
+  violations: { at: string; cycleId: string; rule: string; detail: string }[];
 }
 
 export interface ProgressDashboard {

@@ -52,6 +52,7 @@ export default {
       change: 'تغییر',
     },
     learn: {
+      stageOf: 'مرحلهٔ {{current}} از {{total}}',
       part3: 'بخش ۳: داستان کوتاه',
       subtitleStory: 'داستان و درک مطلب',
       firstWaitNote: 'این انتظار فقط بار اول است؛ از درس دوم به بعد، همه‌چیز از قبل آماده است.',

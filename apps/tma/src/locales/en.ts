@@ -52,6 +52,7 @@ export default {
       change: 'Change',
     },
     learn: {
+      stageOf: 'Stage {{current}} of {{total}}',
       part3: 'Part 3: short story',
       subtitleStory: 'Story and comprehension',
       firstWaitNote: 'This wait only happens once — from lesson two on, everything is ready in advance.',

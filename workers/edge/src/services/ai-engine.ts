@@ -763,6 +763,13 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `  engine: strip parentheses, slashes, ellipses and bracketed notes. REQUIRED on every`,
     `  drill item. ⚠️ It must be the WORD/PHRASE, never the example sentence.`,
     ``,
+    input.user.stage
+      ? `MAP STAGE (fixed reference — do not change it): "${input.user.stage.title}" · objective: ${input.user.stage.objective} · skills: ${input.user.stage.skills.join(', ')}.`
+      : `MAP STAGE: none`,
+    input.user.stage
+      ? `Every item and question must serve THAT objective. Do not introduce goals outside this stage.`
+      : '',
+    ``,
     `DRILL DESIGN — the learner must be able to ANSWER, and we must be able to SCORE it:`,
     `- "meaningOptions": exactly 3 options in ${input.user.uiLanguage}. One is the true`,
     `  meaning (word-for-word identical to "meaning"); the other two are plausible`,

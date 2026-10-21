@@ -180,6 +180,31 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
         </Card>
       )}
 
+      {/* نقشهٔ ثابت — مرحلهٔ جاری */}
+      {data.map && (
+        <Card className="border-border">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[11px] text-text-hint">
+                🗺 {t('learn.stageOf', {
+                  current: data.map.stageIndex,
+                  total: data.map.totalStages,
+                })}
+              </p>
+              <p className="mt-0.5 text-sm font-semibold text-text">
+                {data.map.currentStage}
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-text-hint">
+                {data.map.objective}
+              </p>
+            </div>
+            <span className="chip shrink-0 bg-brand-50 text-brand-700">
+              v{data.map.version}
+            </span>
+          </div>
+        </Card>
+      )}
+
       {reviewOpen && dueItems.length > 0 && (
         <ReviewSession items={dueItems} onClose={() => setReviewOpen(false)} />
       )}

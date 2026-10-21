@@ -16,6 +16,7 @@ import type {
   AdminUserSummary,
   QualitativeSkill,
   TermCard,
+  LearningMap,
 } from '@kpanah/shared';
 import {
   CYCLE_LENGTH_DAYS,
@@ -1121,6 +1122,37 @@ export class ContentRepository {
       /* بی‌صدا: پیش‌فرض ۹ صبح */
     }
     return out;
+  }
+
+  /**
+   * نقشهٔ یادگیری — در `app_settings` با کلید `user:<id>:map` نگه داشته
+   * می‌شود (جدول اختصاصی ندارد و مهاجرت DB لازم نیست).
+   */
+  async getLearningMap(userId: string): Promise<LearningMap | null> {
+    try {
+      const rows = await this.db.select<{ value: LearningMap }>('app_settings', {
+        key: `eq.user:${userId}:map`,
+        select: 'value',
+        limit: '1',
+      });
+      return asRows(rows)[0]?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveLearningMap(userId: string, map: LearningMap): Promise<void> {
+    await this.db
+      .insert(
+        'app_settings',
+        {
+          key: `user:${userId}:map`,
+          value: map as unknown as Record<string, unknown>,
+          description: 'learning map (fixed path)',
+        },
+        { upsertOn: 'key' }
+      )
+      .catch(() => undefined);
   }
 
   /** تنظیمات اقتصادی سراسری (app_settings key='economy') */

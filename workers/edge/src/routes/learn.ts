@@ -27,9 +27,16 @@ import type {
   GeneratedLesson,
   StoryPart,
   ApplicationQuestion,
+  LearningMap,
 } from '@kpanah/shared';
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
+import {
+  buildLearningMap,
+  currentStage,
+  evaluateStage,
+  validateLessonAgainstMap,
+} from '../services/learning-map';
 import {
   coinDiscountFor,
   DEFAULT_COIN_DISCOUNT,
@@ -289,9 +296,22 @@ export async function handleHome(
 
   const economy = await r.getEconomySettings();
 
+  // ── نقشهٔ ثابت ────────────────────────────────────────────────────
+  const map = await ensureLearningMap(r, user);
+  const stage = currentStage(map);
+
   return jsonSuccess(
     {
       user: profile,
+      map: {
+        version: map.version,
+        outcome: map.outcome,
+        currentStage: stage.titleUi,
+        objective: stage.objectiveUi,
+        stageIndex: stage.order,
+        totalStages: map.stages.length,
+        criteria: stage.criteria,
+      },
       cycle: cycleDto,
       lesson: currentReady ? toLessonDto(current!) : null,
       partsDone,
@@ -608,12 +628,43 @@ export async function handleCompleteLesson(
   });
 
   // ── 5. پایان چرخه؟ trigger تولید چرخه جدید ───────────────────────
+  //
+  // ⚠️ اینجا شواهد **ثبت‌شده** (تلمتری چرخه + وضعیت لایتنر) با معیارهای
+  // **از پیش تعیین‌شدهٔ** مرحله مقایسه می‌شوند؛ تصمیم تسلط دستی نیست.
   const lessons = await r.getLessonsForCycle(lesson.cycle_id);
   const completedDays = lessons
     .filter((l) => l.is_completed || l.id === lessonId)
     .map((l) => l.day_number);
 
   const allDone = completedDays.length >= CYCLE_LENGTH_DAYS;
+
+  /**
+   * پایان چرخه ⇒ ارزیابی مرحلهٔ نقشه با شواهد **ثبت‌شده**.
+   * ⚠️ تصمیم بر اساس معیارهای از پیش تعیین‌شدهٔ مرحله است، نه برداشت مدل.
+   */
+  if (allDone) {
+    try {
+      const map = await ensureLearningMap(r, user);
+      const cycleTelemetry = await r.getTelemetryForCycle(lesson.cycle_id);
+      const cycleAnswers = cycleTelemetry.filter((t) => t.event_type === 'ANSWER');
+      const accuracyPct = cycleAnswers.length
+        ? Math.round(
+            (100 * cycleAnswers.filter((a) => a.is_correct).length) / cycleAnswers.length
+          )
+        : 0;
+
+      const lex = await r.getLexicalItems(user.id, user.target_language);
+      const evaluated = evaluateStage(map, {
+        accuracyPct,
+        masteredTerms: lex.filter((l) => l.mastered).length,
+        weakTerms: lex.filter((l) => l.box <= 2 || l.lapses > 0).length,
+      });
+
+      await r.saveLearningMap(user.id, evaluated.map);
+    } catch {
+      /* best-effort: خطای نقشه نباید تکمیل درس را بشکند */
+    }
+  }
 
   let nextCycleTriggered = false;
   let generationDeferred: string | null = null;
@@ -1319,6 +1370,9 @@ async function buildGenerationInput(
 
   const prefs = await r.getUserPrefs(user.id);
 
+  // مرحلهٔ جاری نقشه — مرجع تولید محتوا
+  const mapForGeneration = currentStage(await ensureLearningMap(r, user));
+
   const delta = buildSkillDelta({
     events: telemetry.map((t) => ({
       eventType: t.event_type,
@@ -1345,6 +1399,18 @@ async function buildGenerationInput(
       uiLanguage: (user.ui_language ?? 'fa') as never,
       targetLanguage: (user.target_language ?? 'en') as never,
       dailyMinutes: prefs.dailyMinutes,
+      stage: (() => {
+        const mapStage = mapForGeneration;
+        return mapStage
+          ? {
+              id: mapStage.id,
+              title: mapStage.titleUi,
+              objective: mapStage.objectiveUi,
+              skills: mapStage.skills,
+              minAccuracy: mapStage.criteria.minAccuracy,
+            }
+          : null;
+      })(),
     },
     cycleNumber,
     delta,
@@ -1845,6 +1911,27 @@ function synthesizeStory(
   };
 }
 
+/**
+ * نقشهٔ یادگیری کاربر را برمی‌گرداند و اگر نبود می‌سازد.
+ * ⚠️ نقشه **قطعی** است؛ فقط یک بار ساخته می‌شود و بعد فقط وضعیت مراحل عوض می‌شود.
+ */
+async function ensureLearningMap(
+  r: ContentRepository,
+  user: { id: string; learning_goal: string | null; target_language: string; ui_language: string | null }
+): Promise<LearningMap> {
+  const existing = await r.getLearningMap(user.id);
+  if (existing?.stages?.length) return existing;
+
+  const map = buildLearningMap({
+    id: `map-${user.id.slice(0, 8)}`,
+    goal: user.learning_goal,
+    targetLanguage: user.target_language,
+    uiLanguage: user.ui_language ?? 'fa',
+  });
+  await r.saveLearningMap(user.id, map);
+  return map;
+}
+
 async function alignTermCards(
   r: ContentRepository,
   input: CycleGenerationInput,
@@ -2087,6 +2174,24 @@ async function ensureLessonContent(
    * به هم ربط نداشتند و تجربهٔ بدی می‌دادند. تا وقتی فراخوانی اختصاصی
    * داستان اضافه نشود، اگر مدل `part3` نداد، بخش ۳ نمایش داده نمی‌شود.
    */
+  /**
+   * اعتبارسنجی نسبت به نقشه — **قبل از انتشار**.
+   * ⚠️ فعلاً non-blocking است: نقض ثبت می‌شود تا اندازه‌گیری شود، ولی درس
+   * حذف نمی‌شود (جلوگیری از خالی ماندن برنامه). پس از تثبیت، به block تبدیل
+   * می‌شود.
+   */
+  const mapForCheck = await r.getLearningMap(input.user.id);
+  if (mapForCheck) {
+    const check = validateLessonAgainstMap(aligned, mapForCheck, cycleId);
+    if (!check.ok) {
+      await r.saveLearningMap(input.user.id, {
+        ...mapForCheck,
+        violations: [...mapForCheck.violations, ...check.violations].slice(-50),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
+
   await r.putCachedContent('LESSON', key, input.user.targetLanguage, aligned);
   return aligned;
 }

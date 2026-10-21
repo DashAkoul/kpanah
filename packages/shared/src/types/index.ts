@@ -756,6 +756,19 @@ export interface LearningMap {
   violations: { at: string; cycleId: string; rule: string; detail: string }[];
   /** سابقهٔ تصمیم‌های موتور تطبیقی (آخرین ۲۰۰ مورد) */
   decisions?: DecisionRecord[];
+  /** نتیجهٔ آزمون کالیبراسیون (سطح برآوردی) */
+  calibration?: {
+    takenAt: string;
+    scorePct: number;
+    answers: number;
+    /** سطح خوداظهاری کاربر در همان لحظه */
+    selfReported: string;
+    /** سطح برآوردشده از آزمون */
+    estimated: string;
+    /** آیا اختلاف معنادار بود؟ */
+    mismatch: boolean;
+    confidence: number;
+  } | null;
 }
 
 export interface ProgressDashboard {

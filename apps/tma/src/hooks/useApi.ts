@@ -82,6 +82,7 @@ export interface HomeData {
     stageIndex: number;
     totalStages: number;
     criteria: { minAccuracy: number; minMasteredTerms: number; maxWeakTerms: number };
+    calibrated?: boolean;
   } | null;
   /** پیکربندی تخفیف سکه (تنظیم مدیر) */
   coinDiscount?: { coinsPerStep?: number; percentPerStep?: number } | null;

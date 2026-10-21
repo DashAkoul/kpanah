@@ -22,6 +22,8 @@ import {
   handleMarkPart,
   handleSetCoinRate,
   handlePreviewDiscount,
+  handleCalibrationTest,
+  handleCalibrationSubmit,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -420,6 +422,10 @@ async function dispatch(
       return handleSetCoinRate(request, context);
     case 'preview-discount':
       return handlePreviewDiscount(request, context);
+    case 'calibration-test':
+      return handleCalibrationTest(request, context);
+    case 'calibration-submit':
+      return handleCalibrationSubmit(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

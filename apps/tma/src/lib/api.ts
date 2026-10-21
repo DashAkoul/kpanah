@@ -460,6 +460,22 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** آزمون کالیبراسیون (سطح برآوردی) */
+  calibrationTest: () =>
+    callApi<{
+      alreadyCalibrated: boolean;
+      items?: { term: string; options: string[]; correctIndex: number }[];
+      calibration?: unknown;
+    }>('calibration-test'),
+
+  calibrationSubmit: (body: {
+    answers: { term: string; isCorrect: boolean; responseMs: number }[];
+  }) =>
+    callApi<{ estimated: string; scorePct: number; mismatch: boolean; stage: string }>(
+      'calibration-submit',
+      { method: 'POST', body }
+    ),
+
   /** تعیین ارزش هر سکه (فقط مدیر) */
   setCoinRate: (body: { coinsPerStep?: number; percentPerStep?: number }) =>
     callApi<{ economy: Record<string, unknown> }>('set-coin-rate', {

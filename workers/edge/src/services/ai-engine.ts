@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import {
+  calibrationTestSchema,
   generatedCycleSchema,
   generatedLessonSchema,
   lessonSkeletonSchema,
@@ -137,6 +138,60 @@ export class AiEngine {
       outline: r.value ? normalizeOutlineTitles(r.value) : null,
       attempts: r.attempts, model: r.model, totalMs: r.totalMs,
     };
+  }
+
+  /**
+   * آزمون کالیبراسیون (۸–۱۰ آیتم) — سطح برآوردی **مستقل از خوداظهاری**.
+   *
+   * ⚠️ چرا لازم است: پیش از این، سطح کاربر فقط همان چیزی بود که خودش
+   * انتخاب می‌کرد؛ اگر خود را B2 می‌زد، محتوا از B2 شروع می‌شد بدون هیچ
+   * شاهدی. این آزمون فقط **نقطهٔ شروع** را تنظیم می‌کند، نه نمره.
+   */
+  async generateCalibration(input: CycleGenerationInput): Promise<{
+    test: { items: { term: string; meaning: string; options: string[]; correctIndex: number }[] } | null;
+    attempts: AiAttempt[];
+    model: string;
+    totalMs: number;
+  }> {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          minItems: 10,
+          maxItems: 10,
+          items: {
+            type: 'object',
+            properties: {
+              term: { type: 'string' },
+              meaning: { type: 'string' },
+              options: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'string' } },
+              correctIndex: { type: 'integer', minimum: 0, maximum: 2 },
+            },
+            required: ['term', 'meaning', 'options', 'correctIndex'],
+          },
+        },
+      },
+      required: ['items'],
+    };
+
+    const r = await this.runChain(
+      calibrationTestSchema,
+      [
+        `You build a short placement test.`,
+        `Target language: ${input.user.targetLanguage}. Learner UI language: ${input.user.uiLanguage}.`,
+        `Produce exactly 10 vocabulary items ordered from very easy (A1) to upper-intermediate (B1).`,
+        `For each: "term" in the target language, "meaning" in ${input.user.uiLanguage}, and exactly`,
+        `3 options in ${input.user.uiLanguage} (one true meaning + two plausible distractors).`,
+        `Set "correctIndex" to the index of the true meaning. Never repeat a term.`,
+        `Return only the JSON object.`,
+      ].join('\n'),
+      `Build the 10-item placement test for ${input.user.targetLanguage}.`,
+      'calibration',
+      jsonSchema
+    );
+
+    return { test: r.value, attempts: r.attempts, model: r.model, totalMs: r.totalMs };
   }
 
   async generateLesson(

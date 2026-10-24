@@ -226,6 +226,7 @@ export default {
       OTHER: 'Other',
     },
     profile: {
+      transfer: 'Transfer to real situations',
       quality: 'Learning quality',
       retention: 'Retention (delayed recall)',
       helpRate: 'Dependence on hints',

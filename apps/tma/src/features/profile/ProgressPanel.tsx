@@ -95,6 +95,12 @@ export function ProgressPanel() {
                 <span className="text-xs font-bold text-text">{d.helpRatePct}%</span>
               </div>
             )}
+            {d.transferPct != null && (
+              <div className="flex items-center justify-between rounded-xl bg-[var(--surface-sunken)] p-2.5">
+                <span className="text-[11px] text-text">🎭 {t('profile.transfer')}</span>
+                <span className="text-xs font-bold text-text">{d.transferPct}%</span>
+              </div>
+            )}
             {(d.errorProfile ?? []).slice(0, 3).map((e) => (
               <div
                 key={e.type}

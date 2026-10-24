@@ -38,6 +38,7 @@ export async function runHourlyMaintenance(
   stripped: number;
   deletedOld: boolean;
   prunedAiLog: boolean;
+  alerted: boolean;
 }> {
   const r = repo(env);
   const overdue = await r.listOverdueSubscriptions(200);
@@ -64,7 +65,45 @@ export async function runHourlyMaintenance(
   const aiCutoff = new Date(Date.now() - 180 * 86_400_000).toISOString();
   const prunedAiLog = await r.deleteAiAttemptsOlderThan(aiCutoff);
 
-  return { expired: overdue.length, prunedCache, stripped, deletedOld, prunedAiLog };
+  /**
+   * ⚠️ هشدار سلامت: اگر در یک ساعت اخیر ≥۵ تلاش AI شکست خورده باشد، به
+   * مدیر پیام می‌دهیم. بدون این، خرابی provider فقط با شکایت کاربر فهمیده
+   * می‌شد. چون این تابع ساعتی اجرا می‌شود، حداکثر یک هشدار در ساعت است.
+   */
+  let alerted = false;
+  try {
+    const since = new Date(Date.now() - 3_600_000).toISOString();
+    const failures = await r.countFailedAiAttempts(since);
+    if (failures >= 5 && env.TELEGRAM_BOT_TOKEN) {
+      const adminIds = String(env.TELEGRAM_ADMIN_IDS ?? '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+      for (const id of adminIds.slice(0, 3)) {
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: Number(id),
+            text: `⚠️ کپناه: ${failures} تلاش ناموفق AI در یک ساعت گذشته. providers را در پنل بررسی کن.`,
+          }),
+        }).catch(() => undefined);
+      }
+      alerted = true;
+    }
+  } catch {
+    /* هشدار هرگز نباید کرون را بشکند */
+  }
+
+  return {
+    expired: overdue.length,
+    prunedCache,
+    stripped,
+    deletedOld,
+    prunedAiLog,
+    alerted,
+  };
 }
 
 // ═════════════════════════════════════════════════════════════════════

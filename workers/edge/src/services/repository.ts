@@ -1143,6 +1143,21 @@ export class ContentRepository {
    * `sumTokensForUserSince` روی همین جدول جمع می‌زند. بدون پاک‌سازی،
    * هم جدول بی‌نهایت رشد می‌کند و هم محاسبهٔ بودجه کند می‌شود.
    */
+  /** تعداد تلاش‌های ناموفق AI در بازهٔ اخیر — برای هشدار سلامت */
+  async countFailedAiAttempts(sinceIso: string): Promise<number> {
+    try {
+      const rows = await this.db.select<{ id: number }>('ai_attempt_log', {
+        created_at: `gte.${sinceIso}`,
+        ok: 'eq.false',
+        select: 'id',
+        limit: '100',
+      });
+      return asRows(rows).length;
+    } catch {
+      return 0;
+    }
+  }
+
   async deleteAiAttemptsOlderThan(olderThanIso: string): Promise<boolean> {
     try {
       await this.db.delete('ai_attempt_log', { created_at: `lt.${olderThanIso}` });

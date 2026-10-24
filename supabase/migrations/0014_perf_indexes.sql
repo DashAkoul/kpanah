@@ -24,8 +24,9 @@ create index if not exists idx_lessons_user_completed
   on public.lessons (user_id, is_completed);
 
 -- واژگان: خواندن جعبه‌ها و مرورهای سررسید
+-- ⚠️ نام ستون `target_language` است، نه `language` (خطای 42703 اولیه از همین بود)
 create index if not exists idx_lexical_user_lang
-  on public.lexical_items (user_id, language);
+  on public.lexical_items (user_id, target_language);
 
 create index if not exists idx_lexical_next_review
   on public.lexical_items (user_id, next_review_at);

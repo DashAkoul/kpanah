@@ -36,6 +36,7 @@ import type {
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import { errorTypeFor, skillFor } from '../services/error-taxonomy';
+import { throttleAi } from '../services/ai-throttle';
 import {
   appendDecision,
   buildLearningMap,
@@ -541,17 +542,30 @@ export async function handleCompleteLesson(
       responseMs: answer.responseMs,
     });
 
+    /**
+     * فاصلهٔ تطبیقی (۱۸.۷): کاربری که مکرراً فراموش می‌کند فاصلهٔ کوتاه‌تر
+     * می‌گیرد، و کسی که روان است فاصلهٔ کمی بلندتر. قاعده در همین‌جا و
+     * قابل‌آزمون است (فاصلهٔ پایه از `applyLeitnerReview` می‌آید).
+     */
+    const lapses = review.lapses ?? 0;
+    const adaptiveInterval = (() => {
+      const base = review.intervalDays ?? 1;
+      if (lapses >= 3) return Math.max(1, Math.floor(base / 2));
+      if (lapses === 0 && (review.ease ?? 2.5) > 2.8) return Math.ceil(base * 1.2);
+      return base;
+    })();
+
     updates.set(term, {
       term,
       box: review.box,
       ease: review.ease,
       repetitions: review.repetitions,
       lapses: review.lapses,
-      intervalDays: review.intervalDays,
+      intervalDays: adaptiveInterval,
       mastered: review.mastered,
       successCount: (existing?.success_count ?? 0) + (answer.isCorrect ? 1 : 0),
       failCount: (existing?.fail_count ?? 0) + (answer.isCorrect ? 0 : 1),
-      nextReviewAt: nextReviewDate(review.intervalDays).toISOString(),
+      nextReviewAt: nextReviewDate(adaptiveInterval).toISOString(),
     });
   }
 
@@ -1014,6 +1028,11 @@ export async function handleRoleplayStart(
   const input = await buildGenerationInput(r, user, 1);
   if (!input) return jsonError('INTERNAL_ERROR', 'could not build input', requestId, env, 500);
 
+  const gate = throttleAi(user.id, 'roleplay-start', 6);
+  if (!gate.ok) {
+    return jsonError('RATE_LIMITED', 'too many requests', requestId, env, 429, 'errors.rateLimited');
+  }
+
   const engine = await textEngine(env, r);
   if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
 
@@ -1036,6 +1055,11 @@ export async function handleRoleplayTurn(
   const parsed = roleplayTurnRequestSchema.safeParse(await readJson(request));
   if (!parsed.success) {
     return jsonError('VALIDATION_ERROR', 'invalid roleplay payload', requestId, env, 400);
+  }
+
+  const gate = throttleAi(user.id, 'roleplay-turn', 20);
+  if (!gate.ok) {
+    return jsonError('RATE_LIMITED', 'too many requests', requestId, env, 429, 'errors.rateLimited');
   }
 
   const engine = await textEngine(env, r);
@@ -1102,6 +1126,11 @@ export async function handleRoleplayFinish(
           verdict: res.result.verdict,
           score: res.result.score,
           turns: parsed.data.transcript.filter((t) => t.role === 'user').length,
+          // ⚠️ متن مکالمه برای بازرسی بعدی (۱۶.۴) — محدود و کوتاه
+          transcript: parsed.data.transcript.slice(-8).map((t) => ({
+            role: t.role,
+            text: t.text.slice(0, 200),
+          })),
         },
       },
     ]);
@@ -1286,6 +1315,18 @@ export async function handleEvaluateFreeWrite(
   const parsed = freeWriteSubmitSchema.safeParse(await readJson(request));
   if (!parsed.success) {
     return jsonError('VALIDATION_ERROR', 'invalid free-write payload', requestId, env, 400);
+  }
+
+  const gate = throttleAi(user.id, 'free-write', 12);
+  if (!gate.ok) {
+    return jsonError(
+      'RATE_LIMITED',
+      `too many requests, retry in ${gate.retryAfterSec}s`,
+      requestId,
+      env,
+      429,
+      'errors.rateLimited'
+    );
   }
 
   const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
@@ -2939,9 +2980,18 @@ async function ensureLessonContent(
   const duplicateViolation = await (async () => {
     try {
       const siblings = await r.getLessonsForCycle(cycleId);
-      const prev = siblings
+      const siblingPrev = siblings
         .filter((l) => l.day_number < day.dayNumber && l.part_1_data)
         .sort((a, b) => b.day_number - a.day_number)[0];
+
+      /**
+       * ⚠️ اگر روز اولِ چرخه باشد، با آخرین درس تکمیل‌شدهٔ کاربر مقایسه
+       * می‌کنیم (حتی از چرخهٔ قبل) تا تکرار بین چرخه‌ها هم دیده شود.
+       */
+      const crossCycle = siblingPrev ? null : await r.getOlderCompletedLesson(input.user.id, 0);
+      const prev = siblingPrev ?? (crossCycle
+        ? ({ day_number: crossCycle.day_number, part_1_data: crossCycle.part_1_data } as unknown as typeof siblingPrev)
+        : undefined);
       if (!prev) return null;
 
       const prevTerms = new Set(

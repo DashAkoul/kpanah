@@ -594,6 +594,7 @@ export default {
       },
     },
     errors: {
+      rateLimited: 'Too many requests — try again in a moment.',
       generic: 'Something went wrong. Please try again.',
       network: 'Connection failed. Check your internet.',
       server_error: 'Temporary server issue. Try again shortly.',

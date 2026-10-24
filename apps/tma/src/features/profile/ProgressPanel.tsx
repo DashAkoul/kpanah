@@ -95,6 +95,19 @@ export function ProgressPanel() {
                 <span className="text-xs font-bold text-text">{d.helpRatePct}%</span>
               </div>
             )}
+            {(d.skillMastery ?? []).map((row) => (
+              <div
+                key={row.skill}
+                className="flex items-center justify-between rounded-xl bg-[var(--surface-sunken)] p-2.5"
+              >
+                <span className="text-[11px] text-text">
+                  {t(`errorTypes.${row.skill}`, { defaultValue: row.skill })}
+                </span>
+                <span className="text-xs font-bold text-text">
+                  {row.pct}% <span className="text-[10px] font-normal text-text-muted">({row.total})</span>
+                </span>
+              </div>
+            ))}
             {d.transferPct != null && (
               <div className="flex items-center justify-between rounded-xl bg-[var(--surface-sunken)] p-2.5">
                 <span className="text-[11px] text-text">🎭 {t('profile.transfer')}</span>

@@ -61,6 +61,11 @@ export function DelayedCheck({ onClose }: { onClose: () => void }) {
         /* best-effort */
       }
       setDone(true);
+      try {
+        localStorage.setItem(`kpanah:delayed:${new Date().toDateString()}`, '1');
+      } catch {
+        /* ignore */
+      }
       haptic('success');
     }, 400);
   };

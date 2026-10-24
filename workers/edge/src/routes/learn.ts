@@ -35,7 +35,7 @@ import type {
 } from '@kpanah/shared';
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
-import { errorTypeFor } from '../services/error-taxonomy';
+import { errorTypeFor, skillFor } from '../services/error-taxonomy';
 import {
   appendDecision,
   buildLearningMap,
@@ -675,6 +675,31 @@ export async function handleCompleteLesson(
   const allDone = completedDays.length >= CYCLE_LENGTH_DAYS;
 
   /**
+   * تسلط تفکیک‌شده به مهارت — هر درس، شمارندهٔ مهارت خودش را به‌روز می‌کند.
+   * ⚠️ جمع‌زدن «تشخیص» و «تولید» در یک عدد، تصویر غلط می‌دهد (۱۱.۶).
+   */
+  try {
+    const skillMap = await ensureLearningMap(r, user);
+    const skillMastery = { ...(skillMap.skillMastery ?? {}) };
+    for (const a of answers) {
+      const skill = skillFor(a.itemId);
+      if (!skill) continue;
+      const cur = skillMastery[skill] ?? { correct: 0, total: 0 };
+      skillMastery[skill] = {
+        correct: cur.correct + (a.isCorrect ? 1 : 0),
+        total: cur.total + 1,
+      };
+    }
+    await r.saveLearningMap(user.id, {
+      ...skillMap,
+      skillMastery,
+      updatedAt: new Date().toISOString(),
+    });
+  } catch {
+    /* best-effort */
+  }
+
+  /**
    * پایان چرخه ⇒ ارزیابی مرحلهٔ نقشه با شواهد **ثبت‌شده**.
    * ⚠️ تصمیم بر اساس معیارهای از پیش تعیین‌شدهٔ مرحله است، نه برداشت مدل.
    */
@@ -862,6 +887,59 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// GET /gate?action=admin-map  (فقط مدیر) — بازرسی نقشهٔ خودِ مدیر
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠️ برای ممیزی: نسخهٔ نقشه، وضعیت مراحل، نقض‌ها و تصمیم‌ها.
+ * فعلاً نقشهٔ **خودِ مدیر** را برمی‌گرداند (پنل ادمین تک‌کاربره).
+ */
+export async function handleAdminMap(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId, telegramId } = context;
+  if (!telegramId) return jsonError('UNAUTHORIZED', 'No identity', requestId, env, 401);
+
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  if (!isAdminFromEnv(env, telegramId) && !user.is_admin) {
+    return jsonError('UNAUTHORIZED', 'admin only', requestId, env, 403);
+  }
+
+  const map = await ensureLearningMap(r, user);
+  return jsonSuccess(
+    {
+      id: map.id,
+      version: map.version,
+      rulesVersion: map.rulesVersion ?? null,
+      goal: map.goal,
+      outcome: map.outcome,
+      currentStageId: map.currentStageId,
+      stages: map.stages.map((st) => ({
+        id: st.id,
+        order: st.order,
+        title: st.titleUi,
+        status: st.status,
+        criteria: st.criteria,
+        prerequisites: st.prerequisites,
+      })),
+      calibration: map.calibration ?? null,
+      skillMastery: map.skillMastery ?? {},
+      violations: map.violations.slice(-20),
+      decisions: (map.decisions ?? []).slice(-20),
+      history: map.history.slice(-10),
+    },
+    requestId,
+    env
+  );
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1168,7 +1246,7 @@ function levelFromScore(scorePct: number): string {
 
 /** GET/POST /gate?action=calibration-test */
 export async function handleCalibrationTest(
-  _request: Request,
+  request: Request,
   context: RequestContext
 ): Promise<Response> {
   const { env, requestId } = context;
@@ -1187,7 +1265,18 @@ export async function handleCalibrationTest(
    * کش مشترک آزمون: برای هر (زبان هدف، زبان رابط) فقط **یک بار** ساخته
    * می‌شود. ⚠️ نسخه در کلید هست تا تغییر اسکیما کش قدیمی را باطل کند.
    */
-  const cacheKey = `calib:${user.target_language}:${user.ui_language ?? 'fa'}:v2`;
+  const reqBody = (await (async () => {
+    try {
+      return (await request.clone().json()) as { stage?: string };
+    } catch {
+      return {} as { stage?: string };
+    }
+  })());
+  const hard = reqBody.stage === 'hard';
+
+  const cacheKey = hard
+    ? `calib:hard:${user.target_language}:${user.ui_language ?? 'fa'}:v1`
+    : `calib:${user.target_language}:${user.ui_language ?? 'fa'}:v2`;
   const cached = (await r.getCachedContent('LESSON', cacheKey)) as
     | { items?: { kind: 'MEANING' | 'LISTENING'; term: string; options: string[]; correctIndex: number }[] }
     | null;
@@ -1209,7 +1298,7 @@ export async function handleCalibrationTest(
     return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
   }
 
-  const res = await engine.generateCalibration(input);
+  const res = await engine.generateCalibration(input, hard ? 'hard' : 'standard');
   if (!res.test?.items?.length) {
     return jsonError('INTERNAL_ERROR', 'calibration generation failed', requestId, env, 502);
   }
@@ -1238,10 +1327,13 @@ export async function handleCalibrationSubmit(
   }
   const { user, repo: r } = resolved;
 
-  const parsed = calibrationSubmitSchema.safeParse(await readJson(request));
+  const rawBody = await readJson(request);
+  const parsed = calibrationSubmitSchema.safeParse(rawBody);
   if (!parsed.success) {
     return jsonError('VALIDATION_ERROR', 'invalid calibration payload', requestId, env, 400);
   }
+  /** مرحلهٔ سخت (tie-breaker) — برای کالیبراسیون تطبیقی دو مرحله‌ای */
+  const isHard = (rawBody as { hard?: boolean }).hard === true;
 
   const answers = parsed.data.answers;
   const correct = answers.filter((a) => a.isCorrect).length;
@@ -1256,7 +1348,11 @@ export async function handleCalibrationSubmit(
     if (a.isCorrect) cur.correct += 1;
     bySkill[key] = cur;
   }
-  const estimated = levelFromScore(scorePct);
+  const estimated = isHard
+    ? scorePct >= 50
+      ? 'B2'
+      : 'B1'
+    : levelFromScore(scorePct);
   const selfReported = String(user.skill_level ?? 'ZERO');
   const selfRank = LEVEL_RANK[selfReported] ?? 0;
   const estRank = LEVEL_RANK[estimated] ?? 1;
@@ -1273,9 +1369,10 @@ export async function handleCalibrationSubmit(
       selfReported,
       estimated,
       mismatch,
-      confidence: answers.length >= 10 ? 0.8 : 0.5,
+      confidence: isHard ? 0.85 : answers.length >= 10 ? 0.8 : 0.5,
       bySkill,
-    },
+      ...(isHard ? { hardScore: scorePct } : {}),
+    } as typeof map.calibration,
     updatedAt: new Date().toISOString(),
   };
 
@@ -2705,13 +2802,50 @@ async function ensureLessonContent(
    * حذف نمی‌شود (جلوگیری از خالی ماندن برنامه). پس از تثبیت، به block تبدیل
    * می‌شود.
    */
+  /**
+   * تشخیص تکرار (۲۰.۵): اگر واژه‌های این درس با درس قبلی همان چرخه
+   * بیش از ۷۰٪ هم‌پوشانی داشته باشد، به‌عنوان نقض ثبت می‌شود.
+   */
+  const duplicateViolation = await (async () => {
+    try {
+      const siblings = await r.getLessonsForCycle(cycleId);
+      const prev = siblings
+        .filter((l) => l.day_number < day.dayNumber && l.part_1_data)
+        .sort((a, b) => b.day_number - a.day_number)[0];
+      if (!prev) return null;
+
+      const prevTerms = new Set(
+        ((prev.part_1_data as { items?: { term: string }[] }).items ?? []).map((i) =>
+          i.term.trim().toLowerCase()
+        )
+      );
+      const nowTerms = (aligned.part1?.items ?? []).map((i) => i.term.trim().toLowerCase());
+      if (prevTerms.size === 0 || nowTerms.length === 0) return null;
+
+      const overlap = nowTerms.filter((t) => prevTerms.has(t)).length / nowTerms.length;
+      if (overlap < 0.7) return null;
+
+      return {
+        at: new Date().toISOString(),
+        cycleId,
+        rule: 'DUPLICATE_CONTENT',
+        detail: `${Math.round(overlap * 100)}٪ واژه‌های روز ${day.dayNumber} با روز ${prev.day_number} یکسان است`,
+      };
+    } catch {
+      return null;
+    }
+  })();
+
   const mapForCheck = await r.getLearningMap(input.user.id);
   if (mapForCheck) {
     const check = validateLessonAgainstMap(aligned, mapForCheck, cycleId);
-    if (!check.ok) {
+    const allViolations = duplicateViolation
+      ? [...check.violations, duplicateViolation]
+      : check.violations;
+    if (allViolations.length > 0) {
       await r.saveLearningMap(input.user.id, {
         ...mapForCheck,
-        violations: [...mapForCheck.violations, ...check.violations].slice(-50),
+        violations: [...mapForCheck.violations, ...allViolations].slice(-50),
         updatedAt: new Date().toISOString(),
       });
     }
@@ -3269,6 +3403,22 @@ export async function handleProgress(
   dashboard.transferPct = transfer.length
     ? Math.round((transfer.filter((e) => e.is_correct).length / transfer.length) * 100)
     : null;
+
+  // تسلط تفکیشده به مهارت (از نقشه)
+  try {
+    const m = await r.getLearningMap(user.id);
+    const sm = m?.skillMastery ?? {};
+    dashboard.skillMastery = Object.entries(sm)
+      .filter(([, v]) => v.total > 0)
+      .map(([skill, v]) => ({
+        skill,
+        pct: Math.round((v.correct / v.total) * 100),
+        total: v.total,
+      }))
+      .sort((a, b) => a.skill.localeCompare(b.skill));
+  } catch {
+    dashboard.skillMastery = [];
+  }
 
   dashboard.skillProgress = [
     { key: 'greetings', current: completed.length, target: 7 },

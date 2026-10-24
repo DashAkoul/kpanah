@@ -46,6 +46,8 @@ export function CalibrationFlow({
     bySkill?: Record<string, { correct: number; total: number }>;
   } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** مرحلهٔ دوم (tie-breaker) — کالیبراسیون تطبیقی دو مرحله‌ای */
+  const [hardMode, setHardMode] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -90,7 +92,25 @@ export function CalibrationFlow({
       }
       setBusy(true);
       try {
-        const res = await api.calibrationSubmit({ answers: next });
+        /**
+         * کالیبراسیون تطبیقی دو مرحله‌ای: اگر در مرحلهٔ استاندارد ≥۸۰٪ گرفتی،
+         * ۶ سؤال سخت‌تر (B1-B2) می‌آید تا سطح دقیق‌تر تعیین شود.
+         */
+        if (!hardMode && next.filter((a) => a.isCorrect).length / next.length >= 0.8) {
+          const hard = await api.calibrationTest('hard');
+          if (hard.items?.length) {
+            setItems(hard.items);
+            setIndex(0);
+            setAnswers([]);
+            setSelected(null);
+            setHardMode(true);
+            setStartedAt(Date.now());
+            setBusy(false);
+            return;
+          }
+        }
+
+        const res = await api.calibrationSubmit({ answers: next, hard: hardMode });
         setResult({ estimated: res.estimated, scorePct: res.scorePct, bySkill: res.bySkill });
         haptic('success');
       } catch {

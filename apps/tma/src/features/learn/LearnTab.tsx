@@ -203,8 +203,15 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
 
       {roleplayOpen && <RoleplayFlow onClose={() => setRoleplayOpen(false)} />}
 
-      {/* مرور تأخیری — ماندگاری */}
-      {data.map?.calibrated && (
+      {/* مرور تأخیری — ماندگاری (روزی یک‌بار) */}
+      {data.map?.calibrated &&
+        (() => {
+          try {
+            return !localStorage.getItem(`kpanah:delayed:${new Date().toDateString()}`);
+          } catch {
+            return true;
+          }
+        })() && (
         <Card className="border-dashed">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">

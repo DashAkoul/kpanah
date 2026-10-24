@@ -152,7 +152,10 @@ export class AiEngine {
    * انتخاب می‌کرد؛ اگر خود را B2 می‌زد، محتوا از B2 شروع می‌شد بدون هیچ
    * شاهدی. این آزمون فقط **نقطهٔ شروع** را تنظیم می‌کند، نه نمره.
    */
-  async generateCalibration(input: CycleGenerationInput): Promise<{
+  async generateCalibration(
+    input: CycleGenerationInput,
+    difficulty: 'standard' | 'hard' = 'standard'
+  ): Promise<{
     test: {
       items: {
         kind: 'MEANING' | 'LISTENING';
@@ -192,7 +195,10 @@ export class AiEngine {
       [
         `You build a short placement test.`,
         `Target language: ${input.user.targetLanguage}. Learner UI language: ${input.user.uiLanguage}.`,
-        `Produce exactly 10 items ordered from very easy (A1) to upper-intermediate (B1):`,
+        difficulty === 'hard'
+          ? `Produce exactly 6 items at B1-B2: advanced vocabulary, longer phrases, abstract topics.`
+          : `Produce exactly 10 items ordered from very easy (A1) to upper-intermediate (B1):`,
+        difficulty === 'hard' ? `(skip the easy levels — this is a tie-breaker set)` : '',
         `7 with "kind":"MEANING" and 3 with "kind":"LISTENING" (interleave them, do not group).`,
         `For MEANING: "term" in the target language and 3 options in ${input.user.uiLanguage}`,
         `  (one true meaning + two plausible distractors).`,

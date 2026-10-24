@@ -229,6 +229,18 @@ export default {
       COMPREHENSION: 'درک مطلب',
       OTHER: 'سایر',
     },
+    adminMap: {
+      title: 'نقشهٔ یادگیری (بازرسی)',
+      stage: 'مرحلهٔ جاری',
+      violations: 'نقض قواعد',
+      decisions: 'تصمیم‌ها',
+      status: {
+        PLANNED: 'برنامه‌ریزی‌شده',
+        IN_PROGRESS: 'در جریان',
+        NEEDS_WORK: 'نیازمند تقویت',
+        MASTERED: 'تسلط تأییدشده',
+      },
+    },
     profile: {
       transfer: 'انتقال به موقعیت واقعی',
       quality: 'کیفیت یادگیری',

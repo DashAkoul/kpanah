@@ -6,6 +6,7 @@ import { SupportPanel } from '../support/SupportPanel';
 import { AdminPanel } from '../admin/AdminPanel';
 import { useSessionStore } from '../../store/session';
 import { useHome } from '../../hooks/useApi';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 
 type PanelView = 'coins' | 'messages' | 'support' | 'admin';
@@ -31,6 +32,14 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
     String(home?.coinDiscount?.percentPerStep ?? 5)
   );
   const [savingRate, setSavingRate] = useState(false);
+
+  // نقشهٔ خودِ مدیر (بازرسی) — فقط برای ادمین
+  const { data: adminMap } = useQuery({
+    queryKey: ['admin-map'],
+    enabled: Boolean(user?.isAdmin),
+    staleTime: 60_000,
+    queryFn: () => api.adminMap(),
+  });
 
   return (
     <div className="space-y-3 p-4">
@@ -72,6 +81,65 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
               {t('coins.spendInStore')}
             </Button>
           </Card>
+
+          {/* بازرسی نقشه — فقط مدیر */}
+          {user?.isAdmin && adminMap && (
+            <Card>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-text">🗺 {t('adminMap.title')}</p>
+                <Chip tone="brand">v{adminMap.version} · r{adminMap.rulesVersion ?? '—'}</Chip>
+              </div>
+              <p className="mt-1 text-[11px] text-text-hint">
+                {t('adminMap.stage')}: {adminMap.currentStageId}
+              </p>
+
+              <div className="mt-2 space-y-1">
+                {adminMap.stages.map((st) => (
+                  <div
+                    key={st.id}
+                    className="flex items-center justify-between rounded-lg bg-[var(--surface-sunken)] px-2.5 py-1.5"
+                  >
+                    <span className="truncate text-[11px] text-text">
+                      {st.order}. {st.title}
+                    </span>
+                    <span className="shrink-0 text-[10px] font-semibold text-text-hint">
+                      {t(`adminMap.status.${st.status}`, { defaultValue: st.status })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {adminMap.violations.length > 0 && (
+                <>
+                  <p className="mt-3 text-[11px] font-semibold text-text-hint">
+                    {t('adminMap.violations')} ({adminMap.violations.length})
+                  </p>
+                  <div className="mt-1 space-y-1">
+                    {adminMap.violations.slice(-3).map((v) => (
+                      <p key={`${v.at}-${v.rule}`} className="text-[10px] leading-relaxed text-text-muted">
+                        • {v.rule}: {v.detail}
+                      </p>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {adminMap.decisions.length > 0 && (
+                <>
+                  <p className="mt-3 text-[11px] font-semibold text-text-hint">
+                    {t('adminMap.decisions')} ({adminMap.decisions.length})
+                  </p>
+                  <div className="mt-1 space-y-1">
+                    {adminMap.decisions.slice(-3).map((d) => (
+                      <p key={`${d.at}-${d.ruleId}`} className="text-[10px] leading-relaxed text-text-muted">
+                        • {d.ruleId} → {d.output}
+                      </p>
+                    ))}
+                  </div>
+                </>
+              )}
+            </Card>
+          )}
 
           {/* تنظیم ارزش سکه — فقط مدیر */}
           {user?.isAdmin && (

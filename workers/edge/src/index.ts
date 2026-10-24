@@ -27,6 +27,7 @@ import {
   handleEvaluateFreeWrite,
   handleDelayedCheck,
   handleDelayedSubmit,
+  handleAdminMap,
   handleRoleplayStart,
   handleRoleplayTurn,
   handleRoleplayFinish,
@@ -438,6 +439,8 @@ async function dispatch(
       return handleDelayedCheck(request, context);
     case 'delayed-submit':
       return handleDelayedSubmit(request, context);
+    case 'admin-map':
+      return handleAdminMap(request, context);
     case 'roleplay-start':
       return handleRoleplayStart(request, context);
     case 'roleplay-turn':

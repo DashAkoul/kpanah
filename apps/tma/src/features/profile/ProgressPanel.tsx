@@ -78,6 +78,41 @@ export function ProgressPanel() {
         />
       </div>
 
+      {/* کیفیت یادگیری — ماندگاری، وابستگی، پروفایل خطا */}
+      {(d.delayedRecallPct != null || d.helpRatePct != null || (d.errorProfile?.length ?? 0) > 0) && (
+        <Card>
+          <p className="mb-2 text-xs font-semibold text-text">{t('profile.quality')}</p>
+          <div className="space-y-2">
+            {d.delayedRecallPct != null && (
+              <div className="flex items-center justify-between rounded-xl bg-[var(--surface-sunken)] p-2.5">
+                <span className="text-[11px] text-text">⏳ {t('profile.retention')}</span>
+                <span className="text-xs font-bold text-text">{d.delayedRecallPct}%</span>
+              </div>
+            )}
+            {d.helpRatePct != null && (
+              <div className="flex items-center justify-between rounded-xl bg-[var(--surface-sunken)] p-2.5">
+                <span className="text-[11px] text-text">🆘 {t('profile.helpRate')}</span>
+                <span className="text-xs font-bold text-text">{d.helpRatePct}%</span>
+              </div>
+            )}
+            {(d.errorProfile ?? []).slice(0, 3).map((e) => (
+              <div
+                key={e.type}
+                className="flex items-center justify-between rounded-xl bg-[var(--surface-sunken)] p-2.5"
+              >
+                <span className="text-[11px] text-text">
+                  {t(`errorTypes.${e.type}`, { defaultValue: e.type })}
+                </span>
+                <span className="text-xs font-bold text-text">{e.count}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-text-muted">
+            {t('profile.qualityHint')}
+          </p>
+        </Card>
+      )}
+
       {/* Qualitative skills — the "what you can do now" panel */}
       <Card>
         <p className="mb-1 text-xs font-semibold text-text">{t('profile.skills')}</p>

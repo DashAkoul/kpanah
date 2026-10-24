@@ -460,6 +460,19 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** مرور تأخیری — سنجش ماندگاری */
+  delayedCheck: () =>
+    callApi<{
+      items: { term: string; options: string[]; correctIndex: number; fromDay: number }[];
+      fromLessonId?: string;
+    }>('delayed-check'),
+
+  delayedSubmit: (body: {
+    answers: { term: string; isCorrect: boolean }[];
+    lessonId?: string;
+  }) =>
+    callApi<{ recorded: number }>('delayed-submit', { method: 'POST', body }),
+
   /** ارزیابی پاسخ آزاد (نوشتاری) */
   evaluateFreeWrite: (body: {
     term: string;

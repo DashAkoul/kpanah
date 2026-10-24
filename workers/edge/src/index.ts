@@ -25,6 +25,8 @@ import {
   handleCalibrationTest,
   handleCalibrationSubmit,
   handleEvaluateFreeWrite,
+  handleDelayedCheck,
+  handleDelayedSubmit,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -429,6 +431,10 @@ async function dispatch(
       return handleCalibrationSubmit(request, context);
     case 'evaluate-free-write':
       return handleEvaluateFreeWrite(request, context);
+    case 'delayed-check':
+      return handleDelayedCheck(request, context);
+    case 'delayed-submit':
+      return handleDelayedSubmit(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

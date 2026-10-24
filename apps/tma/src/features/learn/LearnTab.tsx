@@ -6,6 +6,7 @@ import { LessonCard } from './LessonCard';
 import { useHome, useRetryCycle, useDueReviews } from '../../hooks/useApi';
 import { ReviewSession } from './ReviewSession';
 import { CalibrationFlow } from './CalibrationFlow';
+import { DelayedCheck } from './DelayedCheck';
 import { useSessionStore } from '../../store/session';
 import { useUiStore } from '../../store/ui';
 
@@ -27,6 +28,7 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const due = useDueReviews();
   const [reviewOpen, setReviewOpen] = useState(false);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
+  const [delayedOpen, setDelayedOpen] = useState(false);
   const showToast = useUiStore((s) => s.showToast);
 
   /**
@@ -181,6 +183,23 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
           </div>
         </Card>
       )}
+
+      {/* مرور تأخیری — ماندگاری */}
+      {data.map?.calibrated && (
+        <Card className="border-dashed">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-text">⏳ {t('delayed.cardTitle')}</p>
+              <p className="mt-0.5 text-[11px] text-text-hint">{t('delayed.cardHint')}</p>
+            </div>
+            <Button size="sm" variant="secondary" onClick={() => setDelayedOpen(true)}>
+              {t('delayed.open')}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {delayedOpen && <DelayedCheck onClose={() => setDelayedOpen(false)} />}
 
       {/* کالیبراسیون — سطح برآوردی */}
       {data.map && !data.map.calibrated && (

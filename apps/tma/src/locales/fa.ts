@@ -66,6 +66,16 @@ export default {
       note: 'این عدد نمره نیست؛ فقط برای انتخاب نقطهٔ شروع استفاده می‌شود.',
       startLearning: 'شروع یادگیری',
     },
+    delayed: {
+      cardTitle: 'یادت مانده؟',
+      cardHint: '۲ سؤال از درس چند روز پیش — بدون راهنما',
+      open: 'بزن',
+      title: 'مرور تأخیری',
+      none: 'هنوز درسی نیست که ۲ روز از آن گذشته باشد',
+      fromDay: 'از درس روز {{day}}',
+      result: '{{correct}} از {{total}} درست',
+      resultHint: 'این عدد ماندگاری یادگیری تو را نشان می‌دهد، نه هوش یا سرعت.',
+    },
     learn: {
       stageOf: 'مرحلهٔ {{current}} از {{total}}',
       part3: 'بخش ۳: داستان کوتاه',
@@ -187,7 +197,19 @@ export default {
     panel: {
       coins: 'امتیازات',
     },
-    profile: {      wordsMasteredTitle: 'واژه‌های تثبیت‌شده',
+    errorTypes: {
+      VOCABULARY: 'واژه',
+      GRAMMAR: 'دستور زبان',
+      APPLICATION: 'کاربرد در موقعیت',
+      PRODUCTION: 'تولید جمله',
+      COMPREHENSION: 'درک مطلب',
+      OTHER: 'سایر',
+    },
+    profile: {
+      quality: 'کیفیت یادگیری',
+      retention: 'ماندگاری (مرور تأخیری)',
+      helpRate: 'وابستگی به راهنما',
+      qualityHint: 'ماندگاری از مرور تأخیری می‌آید، نه از تعداد درس. وابستگی به راهنما = سهم پاسخ‌های درستی که با کمک بوده‌اند.',      wordsMasteredTitle: 'واژه‌های تثبیت‌شده',
       wordsLearningTitle: 'واژه‌های در حال یادگیری',
       boxOf: 'جعبهٔ {{box}}/۵',
       dueToday: 'مرور: امروز',

@@ -561,13 +561,37 @@ export async function handleCompleteLesson(
   );
 
   // ── 2. ثبت تلمتری ────────────────────────────────────────────────
+  /**
+   * دسته‌بندی خطا — از **شناسهٔ آیتم** استنباط می‌شود، نه از حدس مدل.
+   * ⚠️ بدون این، «چرا ضعیف است» قابل تحلیل نیست (بخش ۱۰.۱ چک‌لیست).
+   */
+  const errorTypeFor = (itemId: string, isCorrect: boolean, usedHint: boolean): string | null => {
+    if (isCorrect) return null;
+    if (itemId.startsWith('write-')) return 'PRODUCTION';
+    if (itemId.startsWith('example-')) return 'GRAMMAR';
+    if (itemId.startsWith('pattern-')) return 'APPLICATION';
+    if (itemId.startsWith('meaning-')) return 'VOCABULARY';
+    if (itemId.startsWith('story-')) return 'COMPREHENSION';
+    return usedHint ? 'VOCABULARY' : 'OTHER';
+  };
+
+  // هدف و مرحلهٔ جاری — برای ردیابی «این پاسخ به کدام هدف مربوط بود»
+  let lessonObjective: string | null = lesson.objective ?? null;
+  let lessonStage: string | null = null;
+  try {
+    const currentMap = await r.getLearningMap(user.id);
+    lessonStage = currentMap?.currentStageId ?? null;
+  } catch {
+    /* best-effort */
+  }
+
   const telemetryRows = [
     {
       user_id: user.id,
       lesson_id: lessonId,
       cycle_id: lesson.cycle_id,
       event_type: 'LESSON_START',
-      payload: { day: lesson.day_number },
+      payload: { day: lesson.day_number, objective: lessonObjective, stage: lessonStage },
     },
     ...answers.map((a) => ({
       user_id: user.id,
@@ -577,14 +601,25 @@ export async function handleCompleteLesson(
       item_id: a.itemId,
       is_correct: a.isCorrect,
       response_ms: a.responseMs,
-      payload: a.usedHint ? { usedHint: true } : null,
+      payload: {
+        ...(a.usedHint ? { usedHint: true } : {}),
+        errorType: errorTypeFor(a.itemId, a.isCorrect, Boolean(a.usedHint)),
+        objective: lessonObjective,
+        stage: lessonStage,
+        day: lesson.day_number,
+      },
     })),
     {
       user_id: user.id,
       lesson_id: lessonId,
       cycle_id: lesson.cycle_id,
       event_type: 'LESSON_END',
-      payload: { day: lesson.day_number, durationSeconds },
+      payload: {
+        day: lesson.day_number,
+        durationSeconds,
+        objective: lessonObjective,
+        stage: lessonStage,
+      },
     },
   ];
 
@@ -831,6 +866,96 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// مرور تأخیری — سنجش ماندگاری (۲ تا ۷ روز بعد)
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠️ چرا لازم است: مرور لایتنر «فاصلهٔ برنامه‌ریزی‌شده» را می‌سنجد، ولی
+ * ماندگاری واقعی یعنی «بعد از چند روز، بدون زمینهٔ درس، یادت مانده؟»
+ */
+export async function handleDelayedCheck(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const lesson = await r.getOlderCompletedLesson(user.id, 2);
+  if (!lesson) return jsonSuccess({ items: [] }, requestId, env);
+
+  const items = ((lesson.part_1_data as { items?: { term: string; meaning: string }[] }).items ?? [])
+    .filter((i) => i.term && i.meaning)
+    .slice(0, 2);
+
+  if (items.length === 0) return jsonSuccess({ items: [] }, requestId, env);
+
+  const pool = ((lesson.part_1_data as { items?: { meaning: string }[] }).items ?? [])
+    .map((i) => i.meaning)
+    .filter(Boolean);
+
+  const questions = items.map((item, idx) => {
+    const distractors = pool.filter((m) => m !== item.meaning).slice(0, 2);
+    while (distractors.length < 2) distractors.push(`—${distractors.length + 1}`);
+    const options = [item.meaning, ...distractors];
+    // چیدمان قطعی تا رفرش، ترتیب را عوض نکند
+    const shift = (item.term.length + idx) % 3;
+    const rotated = [...options.slice(shift), ...options.slice(0, shift)];
+    return {
+      term: item.term,
+      options: rotated,
+      correctIndex: rotated.indexOf(item.meaning),
+      fromDay: lesson.day_number,
+    };
+  });
+
+  return jsonSuccess({ items: questions, fromLessonId: lesson.id }, requestId, env);
+}
+
+/** POST /gate?action=delayed-submit */
+export async function handleDelayedSubmit(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const body = (await readJson(request)) as {
+    answers?: { term?: string; isCorrect?: boolean; lessonId?: string }[];
+  };
+  const answers = Array.isArray(body.answers) ? body.answers.slice(0, 5) : [];
+  if (answers.length === 0) {
+    return jsonError('VALIDATION_ERROR', 'answers required', requestId, env, 400);
+  }
+
+  try {
+    await r.insertTelemetry(
+      answers.map((a) => ({
+        user_id: user.id,
+        lesson_id: a.lessonId ?? null,
+        cycle_id: null,
+        event_type: 'ANSWER',
+        item_id: `delayed-${String(a.term ?? 'x')}`.slice(0, 60),
+        is_correct: Boolean(a.isCorrect),
+        response_ms: null,
+        payload: { mode: 'DELAYED_RECALL' },
+      }))
+    );
+  } catch {
+    /* best-effort */
+  }
+
+  return jsonSuccess({ recorded: answers.length }, requestId, env);
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -2965,6 +3090,37 @@ export async function handleProgress(
 
   // ── پیشرفت توانایی‌ها (چند درس از آستانه) ──────────────────────────
   const masteredCount = lexical.filter((l) => l.mastered).length;
+  /**
+   * ── پروفایل خطا و شاخص‌های کیفیت ─────────────────────────────────
+   * ⚠️ همه از تلمتری ثبت‌شده محاسبه می‌شوند، نه از حدس.
+   */
+  const wrong = telemetry.filter((e) => e.event_type === 'ANSWER' && e.is_correct === false);
+  const errorCounts = new Map<string, number>();
+  for (const e of wrong) {
+    const type = String((e.payload as { errorType?: unknown } | null)?.errorType ?? 'OTHER');
+    errorCounts.set(type, (errorCounts.get(type) ?? 0) + 1);
+  }
+  dashboard.errorProfile = [...errorCounts.entries()]
+    .map(([type, count]) => ({ type, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const correctAnswers = telemetry.filter(
+    (e) => e.event_type === 'ANSWER' && e.is_correct === true
+  );
+  const helpedCorrect = correctAnswers.filter(
+    (e) => (e.payload as { usedHint?: unknown } | null)?.usedHint === true
+  ).length;
+  dashboard.helpRatePct = correctAnswers.length
+    ? Math.round((helpedCorrect / correctAnswers.length) * 100)
+    : null;
+
+  const delayed = telemetry.filter(
+    (e) => e.event_type === 'ANSWER' && String(e.item_id ?? '').startsWith('delayed-')
+  );
+  dashboard.delayedRecallPct = delayed.length
+    ? Math.round((delayed.filter((e) => e.is_correct).length / delayed.length) * 100)
+    : null;
+
   dashboard.skillProgress = [
     { key: 'greetings', current: completed.length, target: 7 },
     { key: 'hotel', current: completed.length, target: 14 },

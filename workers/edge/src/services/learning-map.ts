@@ -215,6 +215,46 @@ export function buildLearningMap(input: {
   };
 }
 
+/**
+ * بازنگری **رسمی** نقشه — تنها راه مجاز تغییر مسیر (مورد ۶.۴ چک‌لیست).
+ *
+ * ⚠️ وقتی کاربر هدفش را عوض می‌کند، مسیر قبلی دیگر معتبر نیست: مراحل با
+ * هدف جدید بازساخته می‌شوند، نسخه بالا می‌رود و دلیل در `history` ثبت
+ * می‌شود. کالیبراسیون و تصمیم‌ها حفظ می‌شوند (شواهد کاربر پاک نمی‌شود).
+ */
+export function reviseLearningMap(
+  map: LearningMap,
+  input: { goal: string; targetLanguage: string; uiLanguage: string; reason: string },
+  now: Date = new Date()
+): LearningMap {
+  const rebuilt = buildLearningMap({
+    id: map.id,
+    goal: input.goal,
+    targetLanguage: input.targetLanguage,
+    uiLanguage: input.uiLanguage,
+    now,
+  });
+
+  return {
+    ...rebuilt,
+    version: map.version + 1,
+    createdAt: map.createdAt,
+    // کالیبراسیون و سابقهٔ تصمیم‌ها حفظ می‌شوند
+    calibration: map.calibration ?? null,
+    decisions: map.decisions ?? [],
+    history: [
+      ...map.history,
+      {
+        at: (now ?? new Date()).toISOString(),
+        kind: 'REVISED' as const,
+        from: map.currentStageId,
+        to: rebuilt.currentStageId,
+        reason: `${input.reason} (v${map.version} → v${map.version + 1})`,
+      },
+    ],
+  };
+}
+
 export function currentStage(map: LearningMap): MapStage {
   return map.stages.find((s) => s.id === map.currentStageId) ?? map.stages[0]!;
 }

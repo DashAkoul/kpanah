@@ -807,6 +807,8 @@ export interface ProgressDashboard {
   delayedRecallPct?: number | null;
   /** نسبت پاسخ‌های درست با کمک (وابستگی) */
   helpRatePct?: number | null;
+  /** نرخ موفقیت در انتقال یادگیری (نقش‌آفرینی) */
+  transferPct?: number | null;
 }
 
 /** بخش ۳ درس — داستان کوتاه + درک مطلب */

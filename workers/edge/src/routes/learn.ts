@@ -39,6 +39,7 @@ import { errorTypeFor } from '../services/error-taxonomy';
 import {
   appendDecision,
   buildLearningMap,
+  reviseLearningMap,
   currentStage,
   evaluateStage,
   MIN_EVIDENCE_ANSWERS,
@@ -612,8 +613,14 @@ export async function handleCompleteLesson(
     },
   ];
 
+  /**
+   * ⚠️ idempotency: اگر همین درس قبلاً LESSON_END ثبت کرده، تلمتری را
+   * دوباره ننویس (دو درخواست هم‌زمان می‌توانند هر دو `is_completed=false`
+   * ببینند و دقت کاربر را خراب کنند).
+   */
   try {
-    await r.insertTelemetry(telemetryRows);
+    const alreadyLogged = await r.hasLessonEndTelemetry(lessonId);
+    if (!alreadyLogged) await r.insertTelemetry(telemetryRows);
   } catch (err) {
     console.warn(`[complete] telemetry insert failed: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -3149,6 +3156,32 @@ export async function handleUpdateProfile(
   profile.reminderOn = effective.reminderOn;
   profile.reminderTime = effective.reminderTime;
 
+  /**
+   * ⚠️ تغییر هدف ⇒ بازنگری رسمی نقشه.
+   * بدون این، کاربر هدفش را عوض می‌کرد ولی مسیر قبلی سر جایش می‌ماند
+   * (مرحلهٔ پایانی برای هدف قدیمی بود).
+   */
+  const goalChanged =
+    d.learningGoal !== undefined && d.learningGoal !== user.learning_goal;
+  if (goalChanged) {
+    try {
+      const existingMap = await r.getLearningMap(user.id);
+      if (existingMap) {
+        await r.saveLearningMap(
+          user.id,
+          reviseLearningMap(existingMap, {
+            goal: d.learningGoal ?? 'DAILY',
+            targetLanguage: String(updated.target_language ?? user.target_language),
+            uiLanguage: String(updated.ui_language ?? user.ui_language ?? 'fa'),
+            reason: 'کاربر هدف یادگیری را تغییر داد',
+          })
+        );
+      }
+    } catch {
+      /* بازنگری نقشه best-effort است */
+    }
+  }
+
   return jsonSuccess({ updated: true, user: profile }, requestId, env);
 }
 
@@ -3269,6 +3302,17 @@ export async function handleProgress(
   );
   dashboard.delayedRecallPct = delayed.length
     ? Math.round((delayed.filter((e) => e.is_correct).length / delayed.length) * 100)
+    : null;
+
+  /**
+   * انتقال یادگیری: موفقیت در نقش‌آفرینی — یعنی «آموخته را در موقعیت
+   * تازه به کار بردی»، نه تکرار مثال درس (مورد ۱۱.۴ / ۲۵.۳).
+   */
+  const transfer = telemetry.filter(
+    (e) => e.event_type === 'ANSWER' && e.item_id === 'roleplay'
+  );
+  dashboard.transferPct = transfer.length
+    ? Math.round((transfer.filter((e) => e.is_correct).length / transfer.length) * 100)
     : null;
 
   dashboard.skillProgress = [

@@ -226,6 +226,7 @@ export default {
       OTHER: 'سایر',
     },
     profile: {
+      transfer: 'انتقال به موقعیت واقعی',
       quality: 'کیفیت یادگیری',
       retention: 'ماندگاری (مرور تأخیری)',
       helpRate: 'وابستگی به راهنما',

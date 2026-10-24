@@ -1078,6 +1078,25 @@ export class ContentRepository {
     }
   }
 
+  /**
+   * آیا برای این درس قبلاً LESSON_END ثبت شده؟
+   * ⚠️ برای idempotency: اگر دو درخواست هم‌زمان برسند (هر دو `is_completed=false`
+   * ببینند)، تلمتری دوبار ثبت می‌شود و آمار دقت خراب می‌شود.
+   */
+  async hasLessonEndTelemetry(lessonId: string): Promise<boolean> {
+    try {
+      const rows = await this.db.select<{ id: string }>('telemetry_events', {
+        lesson_id: `eq.${lessonId}`,
+        event_type: 'eq.LESSON_END',
+        select: 'id',
+        limit: '1',
+      });
+      return asRows(rows).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   async listCompletedLessons(
     userId: string
   ): Promise<{ day_number: number; duration_seconds: number | null; completed_at: string | null }[]> {

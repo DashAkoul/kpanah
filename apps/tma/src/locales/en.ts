@@ -161,6 +161,7 @@ export default {
       finishedBody: '{{correct}} of {{total}} correct.',
     },
     lesson: {
+      buildHint: 'Tap the words in the right order (two words are extra)',
       meaningLabel: 'Meaning',
       listenPrompt: 'Which word did you hear?',
       chooseOption: 'Choose an option',

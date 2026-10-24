@@ -161,6 +161,41 @@ export async function handleHome(
     }
   }
 
+  /**
+   * ── خودترمیمی «کاربر بدون چرخه» ──────────────────────────────────
+   *
+   * ⚠️ باگ واقعی: کاربری که قبلاً onboarding را کامل کرده ولی چرخه‌اش
+   * (به هر دلیلی) وجود ندارد، در صفحهٔ «خوش آمدی» گیر می‌کرد و دکمهٔ
+   * «تلاش مجدد» فقط home را دوباره صدا می‌زد — بدون ساختن چرخه.
+   * حالا خودِ سرور چرخه را می‌سازد و تولید را زمان‌بندی می‌کند.
+   */
+  if (!activeCycle && !generatingCycle && user.onboarding_done) {
+    try {
+      const latest = await r.getLatestCycle(user.id);
+      const nextNumber = (latest?.cycle_number ?? 0) + 1;
+      const created = await r.createGeneratingCycle(user.id, nextNumber);
+      await scheduleCycleGeneration(context, user.id, nextNumber);
+      const genLessons = await r.getLessonsForCycle(created.id);
+      console.log(`[home] created missing cycle ${created.id} (#${nextNumber})`);
+      return jsonSuccess(
+        {
+          user: profile,
+          cycle: toCycleDto(created, genLessons),
+          lesson: null,
+          generating: true,
+          generationStatus: 'GENERATING',
+          generationError: null,
+        },
+        requestId,
+        env
+      );
+    } catch (err) {
+      console.warn(
+        `[home] auto-cycle failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   if (!activeCycle) {
     // ⚠️ چرا `generating` فقط برای GENERATING است: قبلاً هر چرخهٔ
     // GENERATING/FAILED باعث `generating: true` می‌شد و کاربر برای چرخهٔ
@@ -2308,7 +2343,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 11;
+export const LESSON_CONTENT_VERSION = 12;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -2988,6 +3023,28 @@ async function ensureLessonContent(
 
   // هم‌ترازی با کش سطح واژه قبل از ذخیره → محتوای کش‌شده هم ثابت است
   let aligned = await alignTermCards(r, input, res.lesson);
+
+  /**
+   * اعتبارسنجی «ساخت جمله»: هر توکنِ پاسخ باید در فهرست واژه‌ها باشد و
+   * دست‌کم ۳ توکن داشته باشد؛ در غیر این صورت حذف می‌شود (سؤال غیرقابل‌حل).
+   */
+  aligned = {
+    ...aligned,
+    part1: {
+      ...aligned.part1,
+      items: (aligned.part1?.items ?? []).map((it) => {
+        const wo = it.wordOrder;
+        if (!wo) return it;
+        const pool = new Set(wo.words.map((w) => w.trim().toLowerCase()));
+        const ok =
+          wo.answer.length >= 3 && wo.answer.every((a) => pool.has(a.trim().toLowerCase()));
+        if (ok) return it;
+        const { wordOrder: _drop, ...rest } = it;
+        void _drop;
+        return rest as typeof it;
+      }),
+    },
+  };
 
   /**
    * اعتبارسنجی شنیداری: گزینهٔ درست باید دقیقاً خودِ واژهٔ آیتم باشد،

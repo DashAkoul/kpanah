@@ -160,6 +160,16 @@ export const patternDrillItemSchema = z.object({
   collocations: z.array(nonEmpty(80)).max(4).optional(),
   synonyms: z.array(nonEmpty(80)).max(4).optional(),
   /**
+   * ساخت جمله با چیدن واژه‌ها — **بدون نیاز به AI برای ارزیابی**.
+   * `words` شامل ۲ واژهٔ اضافی است؛ `answer` ترتیب درست است.
+   */
+  wordOrder: z
+    .object({
+      words: z.array(nonEmpty(40)).min(4).max(10),
+      answer: z.array(nonEmpty(40)).min(3).max(8),
+    })
+    .optional(),
+  /**
    * تمرین تولید آزاد — کاربر خودش جمله می‌سازد.
    * ⚠️ تنها بخشی از درس که پاسخش با AI ارزیابی می‌شود (نه تطبیق رشته).
    */

@@ -160,6 +160,8 @@ export interface PatternDrillItem {
   /** شبکهٔ واژگان — ترکیب‌های رایج و مترادف‌ها */
   collocations?: string[];
   synonyms?: string[];
+  /** ساخت جمله با چیدن واژه‌ها (ارزیابی قطعی، بدون AI) */
+  wordOrder?: { words: string[]; answer: string[] };
   /** تمرین تولید آزاد (نوشتاری) */
   freeWrite?: {
     prompt: string;

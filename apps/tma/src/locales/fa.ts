@@ -161,6 +161,7 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      buildHint: 'واژه‌ها را به ترتیب درست بچین (دو واژه اضافی است)',
       meaningLabel: 'معنی',
       listenPrompt: 'کدام واژه را شنیدی؟',
       chooseOption: 'یک گزینه انتخاب کن',

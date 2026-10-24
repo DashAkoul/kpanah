@@ -32,7 +32,13 @@ function repo(env: Env): ContentRepository {
 
 export async function runHourlyMaintenance(
   env: Env
-): Promise<{ expired: number; prunedCache: number; stripped: number; deletedOld: boolean }> {
+): Promise<{
+  expired: number;
+  prunedCache: number;
+  stripped: number;
+  deletedOld: boolean;
+  prunedAiLog: boolean;
+}> {
   const r = repo(env);
   const overdue = await r.listOverdueSubscriptions(200);
   if (overdue.length > 0) {
@@ -54,7 +60,11 @@ export async function runHourlyMaintenance(
   const deleteCutoff = new Date(Date.now() - 730 * 86_400_000).toISOString();
   const deletedOld = await r.deleteTelemetryOlderThan(deleteCutoff);
 
-  return { expired: overdue.length, prunedCache, stripped, deletedOld };
+  // لاگ AI: ۱۸۰ روز کافی است (بودجهٔ توکن فقط ۲۴ ساعت را می‌بیند)
+  const aiCutoff = new Date(Date.now() - 180 * 86_400_000).toISOString();
+  const prunedAiLog = await r.deleteAiAttemptsOlderThan(aiCutoff);
+
+  return { expired: overdue.length, prunedCache, stripped, deletedOld, prunedAiLog };
 }
 
 // ═════════════════════════════════════════════════════════════════════

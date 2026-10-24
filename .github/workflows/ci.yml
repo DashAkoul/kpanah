@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # پکیج مشترک باید قبل از typecheck ساخته شود (تایپ‌های تولیدشده)
+      - name: Build shared
+        run: npm run build:shared
+
+      - name: Typecheck (all workspaces)
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm run test
+
+  e2e-smoke:
+    # ⚠️ فقط بعد از دیپلوی معنا دارد؛ روی PR اجرا نمی‌شود.
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test live API
+        run: ./scripts/e2e-smoke.sh

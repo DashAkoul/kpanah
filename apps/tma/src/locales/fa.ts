@@ -160,6 +160,8 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      listenPrompt: 'کدام واژه را شنیدی؟',
+      chooseOption: 'یک گزینه انتخاب کن',
       socraticHint: 'به معنی «{{term}}» فکر کن و دوباره انتخاب کن — یکی از گزینه‌ها با آن هم‌خوان است.',
       partial: 'نزدیک بود — یک اصلاح لازم است',
       freeWrite: 'نوبت تو: یک جمله بساز',

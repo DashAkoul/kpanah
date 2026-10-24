@@ -160,6 +160,8 @@ export default {
       finishedBody: '{{correct}} of {{total}} correct.',
     },
     lesson: {
+      listenPrompt: 'Which word did you hear?',
+      chooseOption: 'Choose an option',
       socraticHint: 'Think about the meaning of “{{term}}” and choose again — one option matches it.',
       partial: 'Almost — one fix needed',
       freeWrite: 'Your turn: write one sentence',

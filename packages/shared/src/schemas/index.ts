@@ -151,6 +151,11 @@ export const patternDrillItemSchema = z.object({
   meaningOptions: drillChoiceSchema.optional(),
   /** گزینه‌های مثال — کاربر مثال درست را انتخاب می‌کند */
   exampleOptions: drillChoiceSchema.optional(),
+  /**
+   * تمرین شنیداری: واژه پخش می‌شود و کاربر از بین ۳ **واژه** انتخاب می‌کند.
+   * ⚠️ گزینه‌ها واژه‌اند (نه معنی) — مهارت شنیدن جدا از تشخیص معنی سنجیده شود.
+   */
+  listeningOptions: drillChoiceSchema.optional(),
   /** شبکهٔ واژگان: ترکیب‌های رایج و مترادف‌ها (اختیاری) */
   collocations: z.array(nonEmpty(80)).max(4).optional(),
   synonyms: z.array(nonEmpty(80)).max(4).optional(),

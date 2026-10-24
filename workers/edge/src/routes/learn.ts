@@ -569,9 +569,15 @@ export async function handleCompleteLesson(
   // هدف و مرحلهٔ جاری — برای ردیابی «این پاسخ به کدام هدف مربوط بود»
   let lessonObjective: string | null = lesson.objective ?? null;
   let lessonStage: string | null = null;
+  /** نگاشت مهارت → شناسهٔ هدف مرحله (برای ردیابی شاهد هر هدف) */
+  const objectiveBySkill = new Map<string, string>();
   try {
     const currentMap = await r.getLearningMap(user.id);
     lessonStage = currentMap?.currentStageId ?? null;
+    const stageNow = currentMap ? currentStage(currentMap) : null;
+    for (const obj of stageNow?.objectives ?? []) {
+      objectiveBySkill.set(obj.skill, obj.id);
+    }
   } catch {
     /* best-effort */
   }
@@ -596,6 +602,7 @@ export async function handleCompleteLesson(
         ...(a.usedHint ? { usedHint: true } : {}),
         errorType: errorTypeFor(a.itemId, a.isCorrect, Boolean(a.usedHint)),
         objective: lessonObjective,
+        objectiveId: objectiveBySkill.get(skillFor(a.itemId) ?? '') ?? null,
         stage: lessonStage,
         day: lesson.day_number,
       },
@@ -1190,6 +1197,68 @@ export async function handleDelayedSubmit(
     );
   } catch {
     /* best-effort */
+  }
+
+  /**
+   * ⚠️ شکست در مرور تأخیری باید **اقدام** کند، نه فقط ثبت (۱۱.۷).
+   * اقدام‌ها: یک پله تنزل جعبه، کوتاه‌شدن فاصلهٔ مرور، ثبت تصمیم و
+   * علامت‌گذاری مرحله به‌عنوان «نیازمند تقویت».
+   */
+  const wrongTerms = answers
+    .filter((a) => a.isCorrect === false && a.term)
+    .map((a) => String(a.term));
+
+  if (wrongTerms.length > 0) {
+    try {
+      const lex = await r.getLexicalItems(user.id, user.target_language);
+      const byTerm = new Map(lex.map((l) => [l.term, l]));
+      const intervals = [0, 1, 3, 7, 21];
+
+      for (const term of wrongTerms) {
+        const cur = byTerm.get(term);
+        if (!cur) continue;
+        const box = Math.max(1, (cur.box ?? 1) - 1);
+        const interval = intervals[box - 1] ?? 1;
+        await r
+          .upsertLexicalItem(user.id, user.target_language, {
+            term,
+            box,
+            ease: Math.max(1.3, (cur.ease ?? 2.5) - 0.2),
+            repetitions: cur.repetitions ?? 0,
+            lapses: (cur.lapses ?? 0) + 1,
+            intervalDays: interval,
+            mastered: false,
+            successCount: cur.success_count ?? 0,
+            failCount: (cur.fail_count ?? 0) + 1,
+            nextReviewAt: nextReviewDate(interval).toISOString(),
+          })
+          .catch(() => undefined);
+      }
+
+      let map = await ensureLearningMap(r, user);
+      const stage = currentStage(map);
+      map = appendDecision(map, {
+        scope: 'REVIEW',
+        ruleId: 'RETENTION_FAILED_V1',
+        inputs: {
+          failed: wrongTerms.length,
+          total: answers.length,
+          stage: stage.id,
+        },
+        output: 'DEMOTE_BOX_AND_NEEDS_WORK',
+        reason: `${wrongTerms.length} واژه در مرور تأخیری فراموش شد؛ جعبه تنزل و مرحله نیازمند تقویت شد`,
+        confidence: 0.8,
+      });
+      map = {
+        ...map,
+        stages: map.stages.map((st) =>
+          st.id === stage.id ? { ...st, status: 'NEEDS_WORK' as const } : st
+        ),
+      };
+      await r.saveLearningMap(user.id, map);
+    } catch {
+      /* best-effort */
+    }
   }
 
   return jsonSuccess({ recorded: answers.length }, requestId, env);
@@ -2133,7 +2202,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 10;
+export const LESSON_CONTENT_VERSION = 11;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -2808,6 +2877,29 @@ async function ensureLessonContent(
 
   // هم‌ترازی با کش سطح واژه قبل از ذخیره → محتوای کش‌شده هم ثابت است
   let aligned = await alignTermCards(r, input, res.lesson);
+
+  /**
+   * اعتبارسنجی شنیداری: گزینهٔ درست باید دقیقاً خودِ واژهٔ آیتم باشد،
+   * وگرنه سؤال بی‌معنا می‌شود → حذف.
+   */
+  aligned = {
+    ...aligned,
+    part1: {
+      ...aligned.part1,
+      items: (aligned.part1?.items ?? []).map((it) => {
+        const lo = it.listeningOptions;
+        if (!lo) return it;
+        const idx = lo.correctIndex ?? -1;
+        const picked = lo.options?.[idx];
+        if (!picked || picked.trim().toLowerCase() !== it.term.trim().toLowerCase()) {
+          const { listeningOptions: _drop, ...rest } = it;
+          void _drop;
+          return rest as typeof it;
+        }
+        return it;
+      }),
+    },
+  };
 
   /**
    * ⚠️ اعتبارسنجی **فعال** نسبت به نقشه: هر سؤالی که به واژه‌ای بیرون از

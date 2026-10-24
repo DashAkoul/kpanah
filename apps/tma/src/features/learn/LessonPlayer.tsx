@@ -26,7 +26,7 @@ import { useAudio } from '../../hooks/useAudio';
  *
  * Deliberately absent: any hint that a given day is an assessment.
  */
-type P1Step = 'meaning' | 'example' | 'reveal' | 'pattern' | 'write';
+type P1Step = 'meaning' | 'example' | 'listen' | 'reveal' | 'pattern' | 'write';
 
 /** اولین مرحله‌ای که این آیتم پشتیبانی می‌کند */
 function firstStep(item: PatternDrillItem | undefined): P1Step {
@@ -38,7 +38,11 @@ function firstStep(item: PatternDrillItem | undefined): P1Step {
 /** مرحلهٔ بعدی؛ `null` یعنی «برو آیتم بعد» */
 function stepAfter(step: P1Step, item: PatternDrillItem | undefined): P1Step | null {
   if (step === 'meaning') return item?.exampleOptions ? 'example' : 'reveal';
-  if (step === 'example') return 'reveal';
+  if (step === 'example') {
+    // تمرین شنیداری فقط اگر محتوا داشته باشد
+    return item?.listeningOptions ? 'listen' : 'reveal';
+  }
+  if (step === 'listen') return 'reveal';
   if (step === 'reveal') {
     // الگو فقط وقتی سؤال می‌شود که پاسخ درست مشخص باشد
     if (item?.substitution && item.substitution.correctIndex !== undefined) return 'pattern';
@@ -115,10 +119,15 @@ export function LessonPlayer({
   const [p1Step, setP1Step] = useState<P1Step>(() => firstStep(part1Items[0]));
 
   const [p1Selected, setP1Selected] = useState<number | null>(null);
+  const { play } = useAudio();
+  const targetLanguage = useSessionStore((s) => s.user?.targetLanguage);
   const [p1Checked, setP1Checked] = useState(false);
   /** تلاش‌های بخش ۱ — برای روش سقراطی (یک تلاش دوم با راهنما) */
   const [p1Attempts, setP1Attempts] = useState(0);
   const [p1Hint, setP1Hint] = useState<string | null>(null);
+  // تمرین شنیداری
+  const [listenSelected, setListenSelected] = useState<number | null>(null);
+  const [listenChecked, setListenChecked] = useState(false);
   // تولید آزاد (نوشتاری)
   const [writeText, setWriteText] = useState('');
   const [writeBusy, setWriteBusy] = useState(false);
@@ -234,6 +243,8 @@ export function LessonPlayer({
       setP1Checked(false);
       setP1Attempts(0);
       setP1Hint(null);
+      setListenSelected(null);
+      setListenChecked(false);
       setWriteText('');
       setWriteResult(null);
       session.markItemStart();
@@ -286,6 +297,8 @@ export function LessonPlayer({
       setP1Checked(false);
       setP1Attempts(0);
       setP1Hint(null);
+      setListenSelected(null);
+      setListenChecked(false);
       if (next === 'write') {
         setWriteText('');
         setWriteResult(null);
@@ -418,6 +431,60 @@ export function LessonPlayer({
           />
         )}
 
+      {/* تمرین شنیداری */}
+      {p1Step === 'listen' && currentItem?.listeningOptions && (
+        <Card className="border-dashed">
+          <p className="mb-2 text-[11px] font-medium text-text-hint">
+            🎧 {t('lesson.listenPrompt')}
+          </p>
+          <button
+            type="button"
+            onClick={() => void play(currentItem.speakText || currentItem.term, targetLanguage ?? 'en')}
+            className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-brand-50 text-2xl text-brand-600 transition active:scale-95"
+          >
+            🔊
+          </button>
+          <p className="mt-2 text-center text-[10px] text-text-muted">
+            {t('calibration.replayHint')}
+          </p>
+
+          <div className="mt-3 space-y-2">
+            {currentItem.listeningOptions.options.map((opt, i) => {
+              const correct = i === currentItem.listeningOptions!.correctIndex;
+              return (
+                <button
+                  key={`${opt}-${i}`}
+                  type="button"
+                  onClick={() => {
+                    if (listenChecked) return;
+                    setListenSelected(i);
+                    setListenChecked(true);
+                    session.recordAnswer({
+                      itemId: `listen-${itemIndex}`,
+                      isCorrect: correct,
+                      linkedTerm: currentItem.term,
+                      usedHint: false,
+                    });
+                    haptic(correct ? 'success' : 'error');
+                  }}
+                  className={clsx(
+                    'target-text w-full rounded-xl border p-2.5 text-start text-sm transition',
+                    listenChecked && listenSelected === i
+                      ? correct
+                        ? 'border-success-500 bg-success-100'
+                        : 'border-danger-500 bg-danger-100'
+                      : 'border-border bg-card text-text'
+                  )}
+                  dir="ltr"
+                >
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       {/* تولید آزاد */}
       {p1Step === 'write' && currentItem?.freeWrite && (
         <Card className="border-dashed">
@@ -522,7 +589,7 @@ export function LessonPlayer({
                 currentItem.exampleOptions ||
                 currentItem.substitution?.correctIndex !== undefined
             )}
-            checked={p1Checked}
+            checked={p1Step === 'listen' ? listenChecked : p1Checked}
             canCheck={p1Selected !== null}
             onCheck={checkP1}
             onNext={nextP1}
@@ -610,6 +677,15 @@ function Part1Actions({
   onSubmitWrite?: () => void;
 }) {
   const { t } = useTranslation();
+
+  // تمرین شنیداری: انتخاب گزینه ⇒ بازخورد ⇒ بعدی
+  if (step === 'listen') {
+    return (
+      <Button fullWidth disabled={!checked} onClick={onNext}>
+        {checked ? t('common.next') : t('lesson.chooseOption')}
+      </Button>
+    );
+  }
 
   // تولید آزاد: «ارزیابی» → بازخورد → «بعدی»
   if (step === 'write') {

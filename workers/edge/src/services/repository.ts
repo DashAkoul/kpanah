@@ -1138,6 +1138,20 @@ export class ContentRepository {
     }
   }
 
+  /**
+   * لاگ AI هم نگهداری می‌خواهد: با هر فراخوانی یک ردیف اضافه می‌شود و
+   * `sumTokensForUserSince` روی همین جدول جمع می‌زند. بدون پاک‌سازی،
+   * هم جدول بی‌نهایت رشد می‌کند و هم محاسبهٔ بودجه کند می‌شود.
+   */
+  async deleteAiAttemptsOlderThan(olderThanIso: string): Promise<boolean> {
+    try {
+      await this.db.delete('ai_attempt_log', { created_at: `lt.${olderThanIso}` });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async deleteTelemetryOlderThan(olderThanIso: string): Promise<boolean> {
     try {
       await this.db.delete('telemetry_events', { created_at: `lt.${olderThanIso}` });

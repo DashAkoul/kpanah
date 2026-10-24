@@ -342,7 +342,9 @@ export class AiEngine {
       required: ['reply'],
     };
 
+    // فقط ۶ پیام آخر — جلوگیری از رشد خطی توکن در مکالمهٔ طولانی
     const lines = input.transcript
+      .slice(-6)
       .map((t) => `${t.role === 'ai' ? input.aiRole : input.userRole}: ${t.text}`)
       .join('\n');
 

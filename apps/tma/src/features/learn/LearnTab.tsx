@@ -4,6 +4,7 @@ import { Card, Button, ProgressBar } from '../../components/ui';
 import { Roadmap } from './Roadmap';
 import { LessonCard } from './LessonCard';
 import { useHome, useRetryCycle, useDueReviews } from '../../hooks/useApi';
+import { api } from '../../lib/api';
 import { ReviewSession } from './ReviewSession';
 import { CalibrationFlow } from './CalibrationFlow';
 import { DelayedCheck } from './DelayedCheck';
@@ -24,6 +25,24 @@ import { useUiStore } from '../../store/ui';
 export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const { t } = useTranslation();
   const { data, isLoading, isRefetching, error, refetch } = useHome();
+
+  /**
+   * ⚠️ polling سبک: فقط `gen-status` (۲ کوئری) هر ۵ ثانیه، و به‌محض آماده
+   * شدن درس یک‌بار `home` تازه می‌شود. قبلاً خودِ `home` هر ۵ ثانیه اجرا
+   * می‌شد و سهمیهٔ درخواست کلادفلر را می‌سوزاند.
+   */
+  useEffect(() => {
+    if (!data?.generating) return;
+    const id = setInterval(() => {
+      void api
+        .genStatus()
+        .then((s) => {
+          if (s.ready) void refetch();
+        })
+        .catch(() => undefined);
+    }, 5000);
+    return () => clearInterval(id);
+  }, [data?.generating, refetch]);
   const user = useSessionStore((s) => s.user);
   const retry = useRetryCycle();
   const due = useDueReviews();

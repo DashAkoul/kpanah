@@ -28,6 +28,7 @@ import {
   handleDelayedCheck,
   handleDelayedSubmit,
   handleAdminMap,
+  handleGenStatus,
   handleRoleplayStart,
   handleRoleplayTurn,
   handleRoleplayFinish,
@@ -441,6 +442,8 @@ async function dispatch(
       return handleDelayedSubmit(request, context);
     case 'admin-map':
       return handleAdminMap(request, context);
+    case 'gen-status':
+      return handleGenStatus(request, context);
     case 'roleplay-start':
       return handleRoleplayStart(request, context);
     case 'roleplay-turn':

@@ -190,14 +190,11 @@ export function useHome() {
     },
     staleTime: 30_000,
     /**
-     * ⚠️ وقتی تولید در جریان است، هر ۵ ثانیه poll کن تا کاربر خودش درسِ
-     * آماده‌شده را ببیند (بدون نیاز به رفرش دستی). وقتی تولید تمام شد
-     * (`generating: false`)، polling متوقف می‌شود.
+     * ⚠️ بهینه‌سازی: قبلاً هنگام تولید، هر ۵ ثانیه خودِ `home` (۶ کوئری +
+     * نقشه) دوباره اجرا می‌شد. حالا polling به اکشن سبک `gen-status`
+     * منتقل شده و اینجا polling نداریم.
      */
-    refetchInterval: (query) => {
-      const data = query.state.data as HomeData | undefined;
-      return data?.generating ? 5_000 : false;
-    },
+    refetchInterval: false,
   });
 }
 // ─────────────────────────────────────────────────────────────────────

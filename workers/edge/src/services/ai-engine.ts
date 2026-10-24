@@ -905,6 +905,8 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `  example (identical to "example"); the other two use the SAME term wrongly`,
     `  (wrong collocation, wrong register, or wrong meaning in context).`,
     `  Set "correctIndex" accordingly.`,
+    `- "collocations": 2-3 natural word partners for the term (target language).`,
+    `  "synonyms": 1-3 true synonyms at the same level (omit if none). Never invent.`,
     `- "freeWrite" (on at least 2 items per lesson): a short writing task —`,
     `  "prompt" in ${input.user.uiLanguage} telling the learner to write ONE sentence using`,
     `  the term, "mustUse" = the exact term, "minWords" 3-6, and "sampleAnswer"`,
@@ -1193,6 +1195,8 @@ function patternDrillItemJson(): Record<string, unknown> {
         },
         required: ['base', 'slots', 'correctIndex'],
       },
+      collocations: { type: 'array', items: { type: 'string' }, maxItems: 4 },
+      synonyms: { type: 'array', items: { type: 'string' }, maxItems: 4 },
       freeWrite: {
         type: 'object',
         properties: {

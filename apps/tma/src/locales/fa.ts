@@ -137,6 +137,7 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      socraticHint: 'به معنی «{{term}}» فکر کن و دوباره انتخاب کن — یکی از گزینه‌ها با آن هم‌خوان است.',
       partial: 'نزدیک بود — یک اصلاح لازم است',
       freeWrite: 'نوبت تو: یک جمله بساز',
       freeWritePlaceholder: 'جمله‌ات را اینجا بنویس…',

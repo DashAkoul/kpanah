@@ -35,6 +35,7 @@ import type {
 } from '@kpanah/shared';
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
+import { errorTypeFor } from '../services/error-taxonomy';
 import {
   appendDecision,
   buildLearningMap,
@@ -563,20 +564,6 @@ export async function handleCompleteLesson(
   );
 
   // ── 2. ثبت تلمتری ────────────────────────────────────────────────
-  /**
-   * دسته‌بندی خطا — از **شناسهٔ آیتم** استنباط می‌شود، نه از حدس مدل.
-   * ⚠️ بدون این، «چرا ضعیف است» قابل تحلیل نیست (بخش ۱۰.۱ چک‌لیست).
-   */
-  const errorTypeFor = (itemId: string, isCorrect: boolean, usedHint: boolean): string | null => {
-    if (isCorrect) return null;
-    if (itemId.startsWith('write-')) return 'PRODUCTION';
-    if (itemId.startsWith('example-')) return 'GRAMMAR';
-    if (itemId.startsWith('pattern-')) return 'APPLICATION';
-    if (itemId.startsWith('meaning-')) return 'VOCABULARY';
-    if (itemId.startsWith('story-')) return 'COMPREHENSION';
-    return usedHint ? 'VOCABULARY' : 'OTHER';
-  };
-
   // هدف و مرحلهٔ جاری — برای ردیابی «این پاسخ به کدام هدف مربوط بود»
   let lessonObjective: string | null = lesson.objective ?? null;
   let lessonStage: string | null = null;

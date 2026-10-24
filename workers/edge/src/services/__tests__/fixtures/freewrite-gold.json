@@ -1,0 +1,15 @@
+{
+  "_note": "مجموعهٔ پاسخ مرجع برای سنجش کیفیت ارزیاب (چک‌لیست ۲۵.۷). هر مورد یک جملهٔ زبان‌آموز با برچسب انسانی است. برای اجرای سنجش واقعی به provider فعال نیاز است.",
+  "term": "phone number",
+  "prompt": "یک جمله با «phone number» بنویس",
+  "cases": [
+    { "answer": "My phone number is 0912 345 6789.", "label": "CORRECT", "why": "جملهٔ کامل و درست" },
+    { "answer": "my phone number is 0912 345 6789", "label": "CORRECT", "why": "بدون نقطه و با حرف کوچک — نباید غلط شمرده شود" },
+    { "answer": "Can you give me your phone number?", "label": "CORRECT", "why": "صورت‌بندی متفاوت اما درست" },
+    { "answer": "I phone number is 0912.", "label": "PARTIAL", "why": "واژه درست است اما ضمیر/فعل غلط" },
+    { "answer": "I have phone number 0912.", "label": "PARTIAL", "why": "حرف تعریف جا افتاده" },
+    { "answer": "I like pizza.", "label": "WRONG", "why": "واژه به کار نرفته" },
+    { "answer": "My phone is broken.", "label": "WRONG", "why": "واژهٔ هدف نیست" },
+    { "answer": "", "label": "WRONG", "why": "پاسخ خالی" }
+  ]
+}

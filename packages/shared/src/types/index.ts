@@ -702,6 +702,20 @@ export interface StageCriteria {
   maxWeakTerms: number;
 }
 
+/**
+ * هدف قابل‌اندازه‌گیری درون یک مرحله — **قبل از اجرا** تعریف می‌شود (۱۱.۱).
+ * ⚠️ تفاوت با `criteria`: آن کلیِ مرحله است؛ این‌ها رفتارهای مشخص‌اند.
+ */
+export interface StageObjective {
+  id: string;
+  titleUi: string;
+  /** مهارتی که این هدف را می‌سنجد */
+  skill: string;
+  minAccuracy: number;
+  /** حداقل تعداد شاهد لازم؛ کمتر از آن «نامعلوم» است، نه «مردود» */
+  minSamples: number;
+}
+
 export interface MapStage {
   id: string;
   order: number;
@@ -716,6 +730,8 @@ export interface MapStage {
   /** شناسهٔ مراحل پیش‌نیاز */
   prerequisites: string[];
   criteria: StageCriteria;
+  /** اهداف قابل‌اندازه‌گیری این مرحله */
+  objectives?: StageObjective[];
   status: MapStageStatus;
   /** برآورد تعداد چرخه */
   estimatedCycles: number;
@@ -770,6 +786,11 @@ export interface LearningMap {
   decisions?: DecisionRecord[];
   /** تسلط تفکیک‌شده به مهارت — هر مهارت جداگانه سنجیده می‌شود */
   skillMastery?: Record<string, { correct: number; total: number }>;
+  /** نتیجهٔ آخرین ارزیابی اهداف (به‌ازای مرحله) */
+  objectiveStatus?: Record<
+    string,
+    { id: string; pct: number | null; total: number; passed: boolean | null }[]
+  >;
   /** نتیجهٔ آزمون کالیبراسیون (سطح برآوردی) */
   calibration?: {
     takenAt: string;

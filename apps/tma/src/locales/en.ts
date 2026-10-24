@@ -230,6 +230,9 @@ export default {
       OTHER: 'Other',
     },
     adminMap: {
+      myMap: 'My map',
+      objectives: 'Stage objectives',
+      unknown: 'Unknown',
       title: 'Learning map (inspect)',
       stage: 'Current stage',
       violations: 'Rule violations',

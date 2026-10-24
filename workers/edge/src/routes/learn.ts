@@ -39,6 +39,7 @@ import { errorTypeFor, skillFor } from '../services/error-taxonomy';
 import {
   appendDecision,
   buildLearningMap,
+  evaluateObjectives,
   reviseLearningMap,
   currentStage,
   evaluateStage,
@@ -737,7 +738,27 @@ export async function handleCompleteLesson(
           confidence: 0.2,
         });
       } else {
-        const evaluated = evaluateStage(map, { accuracyPct, masteredTerms, weakTerms });
+        /**
+         * اهداف مرحله (۱۱.۱): اگر معیار کلی رد شد ولی یکی از اهداف مشخص
+         * شکست خورد، ارتقا انجام **نمی‌شود** — معیار از پیش تعیین‌شده است.
+         */
+        const objEval = evaluateObjectives(map, map.skillMastery ?? {});
+        map = { ...map, objectiveStatus: objEval.status };
+
+        let evaluated = evaluateStage(map, { accuracyPct, masteredTerms, weakTerms });
+        if (objEval.failedAny && evaluated.advanced) {
+          evaluated = {
+            advanced: false,
+            reason: `${evaluated.reason} — اما اهداف مشخص مرحله کامل نشد`,
+            map: {
+              ...map,
+              stages: map.stages.map((st) =>
+                st.id === currentStage(map).id ? { ...st, status: 'NEEDS_WORK' as const } : st
+              ),
+            },
+          };
+        }
+
         map = appendDecision(evaluated.map, {
           scope: 'STAGE',
           ruleId: 'STAGE_CRITERIA_V1',
@@ -898,7 +919,7 @@ export async function handleRetryCycle(
  * فعلاً نقشهٔ **خودِ مدیر** را برمی‌گرداند (پنل ادمین تک‌کاربره).
  */
 export async function handleAdminMap(
-  _request: Request,
+  request: Request,
   context: RequestContext
 ): Promise<Response> {
   const { env, requestId, telegramId } = context;
@@ -914,9 +935,24 @@ export async function handleAdminMap(
     return jsonError('UNAUTHORIZED', 'admin only', requestId, env, 403);
   }
 
-  const map = await ensureLearningMap(r, user);
+  // چندکاربره: مدیر می‌تواند نقشهٔ کاربر دیگر را با `userId` ببیند
+  const targetUserId = new URL(request.url).searchParams.get('userId');
+  let target: {
+    id: string;
+    learning_goal: string | null;
+    target_language: string | null;
+    ui_language: string | null;
+  } = user;
+  if (targetUserId && targetUserId !== user.id) {
+    const other = await r.findUserById(targetUserId);
+    if (!other) return jsonError('NOT_FOUND', 'user not found', requestId, env, 404);
+    target = other;
+  }
+
+  const map = await ensureLearningMap(r, target);
   return jsonSuccess(
     {
+      userId: target.id,
       id: map.id,
       version: map.version,
       rulesVersion: map.rulesVersion ?? null,
@@ -929,8 +965,10 @@ export async function handleAdminMap(
         title: st.titleUi,
         status: st.status,
         criteria: st.criteria,
+        objectives: st.objectives ?? [],
         prerequisites: st.prerequisites,
       })),
+      objectiveStatus: map.objectiveStatus ?? {},
       calibration: map.calibration ?? null,
       skillMastery: map.skillMastery ?? {},
       violations: map.violations.slice(-20),
@@ -997,7 +1035,7 @@ export async function handleRoleplayTurn(
   if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
 
   const res = await engine.roleplayReply({
-    targetLanguage: user.target_language,
+    targetLanguage: user.target_language ?? 'en',
     uiLanguage: user.ui_language ?? 'fa',
     level: String(user.skill_level ?? 'A1'),
     ...parsed.data,
@@ -2517,7 +2555,7 @@ async function ensureLearningMap(
   user: {
     id: string;
     learning_goal: string | null;
-    target_language: string;
+    target_language: string | null;
     ui_language: string | null;
   }
 ): Promise<LearningMap> {
@@ -2527,7 +2565,7 @@ async function ensureLearningMap(
   const map = buildLearningMap({
     id: `map-${user.id.slice(0, 8)}`,
     goal: user.learning_goal,
-    targetLanguage: user.target_language,
+    targetLanguage: user.target_language ?? 'en',
     uiLanguage: user.ui_language ?? 'fa',
   });
   await r.saveLearningMap(user.id, map);

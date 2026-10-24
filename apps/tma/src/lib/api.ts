@@ -461,8 +461,10 @@ export const api = {
     }>('due-reviews'),
 
   /** نقشهٔ ادمین (بازرسی) */
-  adminMap: () =>
-    callApi<{
+  adminMap: (userId?: string) => {
+    const qs = new URLSearchParams();
+    if (userId) qs.set('userId', userId);
+    return callApiWithQuery<{
       version: number;
       rulesVersion: number | null;
       currentStageId: string;
@@ -471,7 +473,12 @@ export const api = {
       decisions: { at: string; ruleId: string; output: string; reason: string }[];
       skillMastery: Record<string, { correct: number; total: number }>;
       calibration: { estimated: string; scorePct: number } | null;
-    }>('admin-map'),
+      objectiveStatus: Record<
+        string,
+        { id: string; pct: number | null; total: number; passed: boolean | null }[]
+      >;
+    }>('admin-map', qs);
+  },
 
   /** نقش‌آفرینی */
   roleplayStart: () =>

@@ -620,14 +620,40 @@ export class AiEngine {
     // دقیقه‌ها طول بکشد. با بودجهٔ ۴۵ ثانیه و ۲ provider، بدترین حالت
     // ~۶۰ ثانیه است و بعد درخواست آزاد می‌شود (چرخه FAILED می‌شود تا UI
     // دکمهٔ تلاش مجدد نشان دهد).
-    const deadlineMs = 45_000;
-    const maxProviders = 2;
+    /**
+     * ⚠️ تنظیم مجدد پس از قطعی تولید (۲۴ اکتبر):
+     * قبلاً ۴۵ ثانیه / ۲ provider بود. با سنگین‌تر شدن اسکیما (freeWrite،
+     * listeningOptions، collocations) و اشباع providerهای رایگان، دو تلاش
+     * کافی نبود و به Gemini (اولویت ۵) هرگز نمی‌رسید.
+     * حالا ۴ provider و ۹۰ ثانیه — با تایم‌اوت کوتاه‌تر برای هر provider
+     * تا یکی کند باشد، بقیه شانس داشته باشند.
+     */
+    const deadlineMs = 100_000;
+    /**
+     * ⚠️ ۵ provider: چهار رایگان اول (DeepSeek/MiMo) + Gemini که اولویت ۵
+     * است. قبلاً با ۲ provider، Gemini هرگز امتحان نمی‌شد و اگر رایگان‌ها
+     * اشباع بودند، تولید قطعی شکست می‌خورد.
+     */
+    const maxProviders = 5;
+
+    /**
+     * سقف هر فراخوانی: خروجی‌های بزرگ (درس/اسکلت/داستان) زمان بیشتری
+     * می‌خواهند؛ فراخوانی‌های کوچک باید سریع شکست بخورند تا نوبت بعدی برسد.
+     */
+    const bigOutput =
+      tag === 'outline' ||
+      tag === 'story' ||
+      tag === 'lesson-skeleton' ||
+      tag.startsWith('lesson-');
+    // ۳۰ ثانیه: به‌اندازهٔ کافی برای خروجی بزرگ، و به‌اندازهٔ کافی کوتاه تا
+    // provider کند، نوبت بقیه را نگیرد.
+    const perCallTimeout = bigOutput ? 30_000 : 15_000;
 
     for (const provider of this.providers.slice(0, maxProviders)) {
       if (Date.now() - started > deadlineMs) break;
 
       const first = await this.attemptFor(
-        provider, schema, systemPrompt, userPrompt, schemaForProvider, 'initial'
+        provider, schema, systemPrompt, userPrompt, schemaForProvider, 'initial', perCallTimeout
       );
       attempts.push(first.attempt);
       if (first.value !== null) {
@@ -643,7 +669,7 @@ export class AiEngine {
 
       const repair = buildRepairPrompt(userPrompt, first.errors ?? []);
       const second = await this.attemptFor(
-        provider, schema, systemPrompt, repair, schemaForProvider, 'repair'
+        provider, schema, systemPrompt, repair, schemaForProvider, 'repair', perCallTimeout
       );
       attempts.push(second.attempt);
       if (second.value !== null) {
@@ -666,7 +692,8 @@ export class AiEngine {
     systemPrompt: string,
     userPrompt: string,
     jsonSchema: unknown,
-    phase: 'initial' | 'repair'
+    phase: 'initial' | 'repair',
+    timeoutMs = 30_000
   ): Promise<{ value: T | null; errors?: string[]; attempt: AiAttempt }> {
     const t0 = Date.now();
     const base = {
@@ -681,7 +708,9 @@ export class AiEngine {
         provider,
         systemPrompt,
         userPrompt,
-        jsonSchema
+        jsonSchema,
+        undefined,
+        timeoutMs
       );
       const parsed = extractJson(text);
       if (parsed === null) {
@@ -737,12 +766,20 @@ export class AiEngine {
      * («title: Required» / «part1.type: Invalid literal value»).
      * مسیر ماژولار (outline + تک‌درس) کوچک است و سقف محافظه می‌خواهد.
      */
-    maxOutputTokens?: number
+    maxOutputTokens?: number,
+    timeoutMs = 30_000
   ): Promise<{ text: string; tokensUsed?: number }> {
     switch (provider.protocol) {
       case 'gemini':
         // Gemini structured output را بومی می‌فهمد → اسکیما در generationConfig
-        return this.callGemini(provider, systemPrompt, userPrompt, jsonSchema, maxOutputTokens);
+        return this.callGemini(
+          provider,
+          systemPrompt,
+          userPrompt,
+          jsonSchema,
+          maxOutputTokens,
+          timeoutMs
+        );
       case 'openai_compatible':
         // ⚠️ این‌ها structured output بومی ندارند (`response_format:
         // json_object` فقط «JSON معتبر» را تضمین می‌کند، نه شکل درست). پس
@@ -752,14 +789,16 @@ export class AiEngine {
           provider,
           systemPrompt,
           withSchemaInstruction(userPrompt, jsonSchema),
-          maxOutputTokens
+          maxOutputTokens,
+          timeoutMs
         );
       case 'anthropic':
         return this.callAnthropic(
           provider,
           systemPrompt,
           withSchemaInstruction(userPrompt, jsonSchema),
-          maxOutputTokens
+          maxOutputTokens,
+          timeoutMs
         );
       default: {
         // Exhaustiveness guard: adding a protocol without handling it here
@@ -779,7 +818,8 @@ export class AiEngine {
     systemPrompt: string,
     userPrompt: string,
     jsonSchema: unknown,
-    maxOutputTokens?: number
+    maxOutputTokens?: number,
+    timeoutMs = 30_000
   ): Promise<{ text: string; tokensUsed?: number }> {
     const base = provider.baseUrl ?? 'https://generativelanguage.googleapis.com/v1beta';
     const url = `${base.replace(/\/$/, '')}/models/${provider.model}:generateContent`;
@@ -816,7 +856,7 @@ export class AiEngine {
           // Gemini کافی‌اند.
         }),
       },
-      30_000
+      timeoutMs
     );
 
     if (!res.ok) {
@@ -843,7 +883,8 @@ export class AiEngine {
     provider: ResolvedProvider,
     systemPrompt: string,
     userPrompt: string,
-    maxOutputTokens?: number
+    maxOutputTokens?: number,
+    timeoutMs = 30_000
   ): Promise<{ text: string; tokensUsed?: number }> {
     // DeepSeek's documented endpoint; any other OpenAI-shaped gateway must
     // supply its own base_url through the admin panel.
@@ -869,7 +910,7 @@ export class AiEngine {
           response_format: { type: 'json_object' },
         }),
       },
-      30_000
+      timeoutMs
     );
 
     if (!res.ok) {
@@ -893,7 +934,8 @@ export class AiEngine {
     provider: ResolvedProvider,
     systemPrompt: string,
     userPrompt: string,
-    maxOutputTokens?: number
+    maxOutputTokens?: number,
+    timeoutMs = 30_000
   ): Promise<{ text: string; tokensUsed?: number }> {
     const base = provider.baseUrl ?? 'https://api.anthropic.com';
     const url = `${base.replace(/\/$/, '')}/v1/messages`;
@@ -920,7 +962,7 @@ export class AiEngine {
           ],
         }),
       },
-      30_000
+      timeoutMs
     );
 
     if (!res.ok) {

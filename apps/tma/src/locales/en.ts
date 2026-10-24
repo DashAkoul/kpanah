@@ -51,6 +51,10 @@ export default {
       saving: 'Saving…',
       change: 'Change',
     },
+    calibrationSkill: {
+      MEANING: 'Word meaning',
+      LISTENING: 'Listening',
+    },
     calibration: {
       listenPrompt: 'Which word did you hear?',
       replayHint: 'You can replay it',

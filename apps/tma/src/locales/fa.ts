@@ -51,6 +51,10 @@ export default {
       saving: 'در حال ذخیره…',
       change: 'تغییر',
     },
+    calibrationSkill: {
+      MEANING: 'تشخیص معنی',
+      LISTENING: 'شنیدن',
+    },
     calibration: {
       listenPrompt: 'کدام واژه را شنیدی؟',
       replayHint: 'می‌توانی دوباره پخش کنی',

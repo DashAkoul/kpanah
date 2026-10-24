@@ -393,6 +393,15 @@ export const SKILL_LEVELS: { code: SkillLevel; labelFa: string; labelEn: string;
   { code: 'C1', labelFa: 'پیشرفته', labelEn: 'Advanced', hintFa: 'تسلط حرفه‌ای دارم' },
 ];
 
+/**
+ * نسخهٔ **قواعد آموزشی** سیستم (چک‌لیست ۱.۵).
+ *
+ * ⚠️ هر تغییر در آستانه‌ها، فواصل لایتنر یا معیارهای مرحله باید این عدد را
+ * بالا ببرد؛ در غیر این صورت نمی‌توان گفت رفتار سیستم با کدام نسخه ساخته
+ * شده است.
+ */
+export const SYSTEM_RULES_VERSION = 1;
+
 export const LEARNING_GOALS: { code: string; labelFa: string; labelEn: string; icon: string }[] = [
   { code: 'TRAVEL', labelFa: 'سفر و گردشگری', labelEn: 'Travel', icon: '✈️' },
   { code: 'BUSINESS', labelFa: 'کار و مذاکره', labelEn: 'Business', icon: '💼' },

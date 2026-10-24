@@ -745,6 +745,8 @@ export interface DecisionRecord {
 export interface LearningMap {
   id: string;
   version: number;
+  /** نسخهٔ قواعد آموزشی سیستم (نه نسخهٔ نقشه) — برای بازتولید تصمیم‌ها */
+  rulesVersion?: number;
   goal: string;
   targetLanguage: string;
   uiLanguage: string;

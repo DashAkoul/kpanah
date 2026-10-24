@@ -533,10 +533,13 @@ export const api = {
   calibrationSubmit: (body: {
     answers: { term: string; isCorrect: boolean; responseMs: number }[];
   }) =>
-    callApi<{ estimated: string; scorePct: number; mismatch: boolean; stage: string }>(
-      'calibration-submit',
-      { method: 'POST', body }
-    ),
+    callApi<{
+      estimated: string;
+      scorePct: number;
+      mismatch: boolean;
+      stage: string;
+      bySkill?: Record<string, { correct: number; total: number }>;
+    }>('calibration-submit', { method: 'POST', body }),
 
   /** تعیین ارزش هر سکه (فقط مدیر) */
   setCoinRate: (body: { coinsPerStep?: number; percentPerStep?: number }) =>

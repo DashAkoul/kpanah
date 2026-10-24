@@ -1337,7 +1337,14 @@ export async function handleCalibrationSubmit(
   await r.saveLearningMap(user.id, map);
 
   return jsonSuccess(
-    { estimated, scorePct, mismatch, selfReported, stage: map.currentStageId },
+    {
+      estimated,
+      scorePct,
+      mismatch,
+      selfReported,
+      stage: map.currentStageId,
+      bySkill: map.calibration?.bySkill ?? {},
+    },
     requestId,
     env
   );
@@ -2405,69 +2412,17 @@ function normalizeDrillChoices(lesson: GeneratedLesson): GeneratedLesson {
 }
 
 /**
- * ساخت **محلی** بخش ۳ وقتی مدل آن را برنگرداند.
- *
- * ⚠️ چرا محلی: بعضی providerها اسکیمای متنی را نادیده می‌گیرند و `part3`
- * را حذف می‌کنند. به‌جای شکست کل درس (یا یک فراخوانی AI دیگر)، از
- * جمله‌های مثالِ همان درس یک مکالمهٔ کوتاه می‌سازیم و سؤال درک مطلب را از
- * معنی همان واژه‌ها می‌گیریم — بدون هیچ هزینهٔ اضافه و کاملاً قطعی.
- */
-function synthesizeStory(
-  lesson: GeneratedLesson,
-  uiLanguage: string
-): StoryPart | null {
-  const items = (lesson.part1?.items ?? []).filter((i) => i.example && i.meaning);
-  if (items.length < 3) return null;
-
-  const picked = items.slice(0, 5);
-  const lines = picked.map((item, index) => ({
-    speaker: index % 2 === 0 ? 'A' : 'B',
-    text: item.example,
-  }));
-
-  const promptFor: Record<string, (term: string) => string> = {
-    fa: (term) => `در متن، «${term}» چه معنایی داشت؟`,
-    en: (term) => `In the text, what does "${term}" mean?`,
-    ar: (term) => `في النص، ما معنى «${term}»؟`,
-    tr: (term) => `Metinde "${term}" ne anlama geliyor?`,
-    ru: (term) => `Что означает «${term}» в тексте?`,
-  };
-  const prompt = promptFor[uiLanguage] ?? promptFor.en!;
-
-  const questions: ApplicationQuestion[] = [];
-  for (const item of picked.slice(0, 3)) {
-    const wrong = picked
-      .filter((x) => x.term !== item.term && x.meaning !== item.meaning)
-      .map((x) => x.meaning)
-      .slice(0, 2);
-    if (wrong.length < 2) continue;
-    const options = stableShuffle([item.meaning, wrong[0]!, wrong[1]!], `${item.term}:story`);
-    questions.push({
-      id: `story-${questions.length}`,
-      prompt: prompt(item.term),
-      options,
-      correctIndex: options.indexOf(item.meaning),
-      linkedTerm: item.term,
-    });
-  }
-
-  if (questions.length === 0) return null;
-
-  return {
-    type: 'STORY',
-    title: lesson.title,
-    lines,
-    questions,
-  };
-}
-
-/**
  * نقشهٔ یادگیری کاربر را برمی‌گرداند و اگر نبود می‌سازد.
  * ⚠️ نقشه **قطعی** است؛ فقط یک بار ساخته می‌شود و بعد فقط وضعیت مراحل عوض می‌شود.
  */
 async function ensureLearningMap(
   r: ContentRepository,
-  user: { id: string; learning_goal: string | null; target_language: string; ui_language: string | null }
+  user: {
+    id: string;
+    learning_goal: string | null;
+    target_language: string;
+    ui_language: string | null;
+  }
 ): Promise<LearningMap> {
   const existing = await r.getLearningMap(user.id);
   if (existing?.stages?.length) return existing;
@@ -3371,6 +3326,7 @@ export async function handleDebugDelta(
       map: debugMap
         ? {
             version: debugMap.version,
+            rulesVersion: debugMap.rulesVersion ?? null,
             currentStage: debugMap.currentStageId,
             stages: debugMap.stages.map((st) => ({
               id: st.id,

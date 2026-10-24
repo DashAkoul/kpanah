@@ -230,6 +230,9 @@ export default {
       OTHER: 'سایر',
     },
     adminMap: {
+      myMap: 'نقشهٔ خودم',
+      objectives: 'اهداف این مرحله',
+      unknown: 'نامعلوم',
       title: 'نقشهٔ یادگیری (بازرسی)',
       stage: 'مرحلهٔ جاری',
       violations: 'نقض قواعد',

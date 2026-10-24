@@ -1,6 +1,7 @@
 import { SYSTEM_RULES_VERSION } from '@kpanah/shared';
 import type {
   DecisionRecord,
+  StageObjective,
   GeneratedLesson,
   LearningMap,
   MapStage,
@@ -170,6 +171,28 @@ const OUTCOMES: Record<string, string> = {
   ACADEMIC: 'تحصیل به زبان مقصد',
 };
 
+/**
+ * اهداف قابل‌اندازه‌گیری هر مرحله — **قطی** و از پیش تعریف‌شده (۱۱.۱).
+ */
+const STAGE_OBJECTIVES: Record<string, StageObjective[]> = {
+  foundation: [
+    { id: 'f_vocab', titleUi: 'واژه‌های معرفی و احوال‌پرسی را می‌شناسم', skill: 'VOCABULARY', minAccuracy: 65, minSamples: 8 },
+    { id: 'f_grammar', titleUi: 'ساختار جملهٔ معرفی را درست می‌سازم', skill: 'GRAMMAR', minAccuracy: 60, minSamples: 4 },
+  ],
+  survival: [
+    { id: 's_vocab', titleUi: 'واژه‌های سفارش/قیمت/مسیر را می‌شناسم', skill: 'VOCABULARY', minAccuracy: 70, minSamples: 10 },
+    { id: 's_app', titleUi: 'در موقعیت واقعی واژه را جای درست می‌گذارم', skill: 'APPLICATION', minAccuracy: 65, minSamples: 5 },
+  ],
+  interaction: [
+    { id: 'i_app', titleUi: 'در گفت‌وگوی کوتاه پاسخ مناسب می‌دهم', skill: 'APPLICATION', minAccuracy: 70, minSamples: 6 },
+    { id: 'i_prod', titleUi: 'خودم یک جملهٔ درست می‌سازم', skill: 'PRODUCTION', minAccuracy: 60, minSamples: 4 },
+  ],
+  transfer: [
+    { id: 't_prod', titleUi: 'آموخته را در جملهٔ تازه به کار می‌برم', skill: 'PRODUCTION', minAccuracy: 65, minSamples: 4 },
+    { id: 't_comp', titleUi: 'متن/داستان تازه را می‌فهمم', skill: 'COMPREHENSION', minAccuracy: 70, minSamples: 4 },
+  ],
+};
+
 /** ساخت قطعی نقشه از پروفایل — بدون AI */
 export function buildLearningMap(input: {
   id: string;
@@ -191,6 +214,11 @@ export function buildLearningMap(input: {
     skills: t.skills,
     prerequisites: index === 0 ? [] : [templates[index - 1]!.key],
     criteria: t.criteria,
+    objectives:
+      STAGE_OBJECTIVES[t.key] ?? [
+        { id: `${t.key}_prod`, titleUi: 'در موقعیت هدف روان و درست صحبت می‌کنم', skill: 'PRODUCTION', minAccuracy: 70, minSamples: 4 },
+        { id: `${t.key}_app`, titleUi: 'در موقعیت هدف واژهٔ درست را انتخاب می‌کنم', skill: 'APPLICATION', minAccuracy: 75, minSamples: 5 },
+      ],
     status: index === 0 ? 'IN_PROGRESS' : 'PLANNED',
     estimatedCycles: t.estimatedCycles,
     masteredAt: null,
@@ -254,6 +282,35 @@ export function reviseLearningMap(
         reason: `${input.reason} (v${map.version} → v${map.version + 1})`,
       },
     ],
+  };
+}
+
+/**
+ * ارزیابی اهداف مرحلهٔ جاری از آمار مهارت‌ها.
+ *
+ * ⚠️ اگر نمونهٔ کافی نباشد، هدف «نامعلوم» است (`passed: null`) و **جلوی
+ * ارتقا را نمی‌گیرد** — وگرنه کاربری که هنوز تولید آزاد نداشته گیر می‌کند.
+ */
+export function evaluateObjectives(
+  map: LearningMap,
+  skillStats: Record<string, { correct: number; total: number }>
+): {
+  status: Record<string, { id: string; pct: number | null; total: number; passed: boolean | null }[]>;
+  failedAny: boolean;
+} {
+  const stage = currentStage(map);
+  const rows = (stage.objectives ?? []).map((obj) => {
+    const stat = skillStats[obj.skill] ?? { correct: 0, total: 0 };
+    if (stat.total < obj.minSamples) {
+      return { id: obj.id, pct: null, total: stat.total, passed: null };
+    }
+    const pct = Math.round((stat.correct / stat.total) * 100);
+    return { id: obj.id, pct, total: stat.total, passed: pct >= obj.minAccuracy };
+  });
+
+  return {
+    status: { ...(map.objectiveStatus ?? {}), [stage.id]: rows },
+    failedAny: rows.some((r) => r.passed === false),
   };
 }
 

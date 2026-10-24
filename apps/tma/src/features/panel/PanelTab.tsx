@@ -34,11 +34,25 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
   const [savingRate, setSavingRate] = useState(false);
 
   // نقشهٔ خودِ مدیر (بازرسی) — فقط برای ادمین
-  const { data: adminMap } = useQuery({
-    queryKey: ['admin-map'],
+  const [targetUser, setTargetUser] = useState<string | undefined>(undefined);
+
+  const { data: adminUsers } = useQuery({
+    queryKey: ['admin-users-picker'],
     enabled: Boolean(user?.isAdmin),
-    staleTime: 60_000,
-    queryFn: () => api.adminMap(),
+    staleTime: 120_000,
+    queryFn: async () => {
+      const res = (await api.adminUsers({ limit: 20 })) as {
+        users: { id: string; firstName?: string | null; telegramId?: number }[];
+      };
+      return res.users ?? [];
+    },
+  });
+
+  const { data: adminMap } = useQuery({
+    queryKey: ['admin-map', targetUser],
+    enabled: Boolean(user?.isAdmin),
+    staleTime: 30_000,
+    queryFn: () => api.adminMap(targetUser),
   });
 
   return (
@@ -93,6 +107,22 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
                 {t('adminMap.stage')}: {adminMap.currentStageId}
               </p>
 
+              {/* انتخاب کاربر — بازرسی چندکاربره */}
+              {(adminUsers?.length ?? 0) > 0 && (
+                <select
+                  value={targetUser ?? ''}
+                  onChange={(e) => setTargetUser(e.target.value || undefined)}
+                  className="mt-2 w-full rounded-xl border border-border bg-card px-2 py-1.5 text-[11px] text-text"
+                >
+                  <option value="">{t('adminMap.myMap')}</option>
+                  {adminUsers!.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.firstName ?? u.telegramId ?? u.id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+              )}
+
               <div className="mt-2 space-y-1">
                 {adminMap.stages.map((st) => (
                   <div
@@ -108,6 +138,34 @@ export function PanelTab({ onGoStore }: { onGoStore: () => void }) {
                   </div>
                 ))}
               </div>
+
+              {(() => {
+                const stageId = adminMap.currentStageId;
+                const rows = adminMap.objectiveStatus?.[stageId] ?? [];
+                if (rows.length === 0) return null;
+                return (
+                  <>
+                    <p className="mt-3 text-[11px] font-semibold text-text-hint">
+                      {t('adminMap.objectives')}
+                    </p>
+                    <div className="mt-1 space-y-1">
+                      {rows.map((r) => (
+                        <div
+                          key={r.id}
+                          className="flex items-center justify-between rounded-lg bg-[var(--surface-sunken)] px-2.5 py-1.5"
+                        >
+                          <span className="truncate text-[10px] text-text">{r.id}</span>
+                          <span className="shrink-0 text-[10px] font-semibold text-text-hint">
+                            {r.passed === null
+                              ? t('adminMap.unknown')
+                              : `${r.pct}% (${r.total})`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
 
               {adminMap.violations.length > 0 && (
                 <>

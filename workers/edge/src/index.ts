@@ -253,7 +253,7 @@ export default {
       if (cron === '0 * * * *') {
         const res = await runHourlyMaintenance(env);
         console.log(
-          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}, stripped payloads: ${res.stripped}, old telemetry deleted: ${res.deletedOld}, ai log pruned: ${res.prunedAiLog}`
+          `[cron:hourly] expired subscriptions: ${res.expired}, pruned cache rows: ${res.prunedCache}, stripped payloads: ${res.stripped}, old telemetry deleted: ${res.deletedOld}, ai log pruned: ${res.prunedAiLog}, alerted: ${res.alerted}`
         );
       } else if (cron === '*/5 * * * *') {
         const res = await runBackgroundGeneration(env);

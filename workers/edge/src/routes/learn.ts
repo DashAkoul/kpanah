@@ -213,11 +213,18 @@ export async function handleHome(
     );
   }
 
-  const lessons = await r.getLessonsForCycle(activeCycle.id);
+  /**
+   * ⚠️ این سه کوئری مستقل‌اند؛ قبلاً سریالی اجرا می‌شدند (۳ رفت‌وبرگشت
+   * پشت‌سرهم به Supabase). حالا موازی‌اند — همان داده، یک‌سوم زمان.
+   */
+  const [lessons, prefs, economy] = await Promise.all([
+    r.getLessonsForCycle(activeCycle.id),
+    r.getUserPrefs(user.id),
+    r.getEconomySettings(),
+  ]);
   const cycleDto = toCycleDto(activeCycle, lessons);
 
   // ── ترجیحات کاربر (دقایق روزانه) روی پروفایل ──────────────────────
-  const prefs = await r.getUserPrefs(user.id);
   if (prefs.dailyMinutes) profile.dailyMinutes = prefs.dailyMinutes;
   if (prefs.dialect) profile.dialect = prefs.dialect;
   profile.reminderOn = prefs.reminderOn;
@@ -303,8 +310,6 @@ export async function handleHome(
   // بخش‌های تکمیل‌شدهٔ درس جاری — سمت سرور (مستقل از دستگاه)
   const partsDone =
     current && currentReady ? await r.getLessonParts(user.id, current.id) : 0;
-
-  const economy = await r.getEconomySettings();
 
   // ── نقشهٔ ثابت ────────────────────────────────────────────────────
   const map = await ensureLearningMap(r, user);

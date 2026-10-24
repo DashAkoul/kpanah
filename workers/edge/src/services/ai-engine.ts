@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import {
   calibrationTestSchema,
+  storyPartSchema,
   freeWriteResultSchema,
   generatedCycleSchema,
   generatedLessonSchema,
@@ -261,6 +262,99 @@ export class AiEngine {
     );
 
     return { result: r.value, attempts: r.attempts };
+  }
+
+  /**
+   * بخش ۳ — داستان/مکالمهٔ کوتاه + درک مطلب.
+   *
+   * ⚠️ چرا فراخوانی جداگانه: مدل در پاسخ اصلی، `part3` را (که اختیاری بود)
+   * حذف می‌کرد و درس بدون بخش ۳ منتشر می‌شد. اینجا فقط داستان ساخته
+   * می‌شود (خروجی کوچک) و متن از واژه‌های همان درس استفاده می‌کند تا
+   * جمله‌های بی‌ربط تولید نشود.
+   */
+  async generateStory(
+    input: CycleGenerationInput,
+    day: OutlineDay,
+    lesson: GeneratedLesson
+  ): Promise<{
+    story: {
+      type: 'STORY';
+      title: string;
+      lines: { speaker?: string; text: string }[];
+      questions: {
+        id: string;
+        prompt: string;
+        options: string[];
+        correctIndex: number;
+        linkedTerm?: string;
+      }[];
+    } | null;
+    attempts: AiAttempt[];
+  }> {
+    const terms = (lesson.part1?.items ?? []).map((i) => i.term).slice(0, 6);
+    const scenario = lesson.part2?.scenario ?? '';
+
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        type: { type: 'string', enum: ['STORY'] },
+        title: { type: 'string' },
+        lines: {
+          type: 'array',
+          minItems: 4,
+          maxItems: 8,
+          items: {
+            type: 'object',
+            properties: { speaker: { type: 'string' }, text: { type: 'string' } },
+            required: ['text'],
+          },
+        },
+        questions: {
+          type: 'array',
+          minItems: 2,
+          maxItems: 3,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              prompt: { type: 'string' },
+              options: { type: 'array', minItems: 3, maxItems: 3, items: { type: 'string' } },
+              correctIndex: { type: 'integer', minimum: 0, maximum: 2 },
+              linkedTerm: { type: 'string' },
+            },
+            required: ['id', 'prompt', 'options', 'correctIndex'],
+          },
+        },
+      },
+      required: ['type', 'title', 'lines', 'questions'],
+    };
+
+    const r = await this.runChain(
+      storyPartSchema,
+      [
+        `You write a very short dialogue for a language learner.`,
+        `Target language: ${input.user.targetLanguage}. Learner UI language: ${input.user.uiLanguage}.`,
+        `The learner's level: ${input.user.skillLevel}.`,
+        ``,
+        `Write ONE coherent mini-dialogue (4-8 short sentences) in the target language.`,
+        `It must:`,
+        `- reuse these words naturally: ${terms.join(', ') || '(none)'}`,
+        `- happen in this situation: ${scenario || 'everyday life'}`,
+        `- use 2 speakers (give short names in "speaker")`,
+        `- be connected: each line follows from the previous one (a real exchange, not random sentences)`,
+        `- stay at the learner's level: short sentences, no idioms they never saw.`,
+        ``,
+        `Then write 2-3 comprehension questions **in ${input.user.uiLanguage}** about THIS dialogue:`,
+        `"prompt" asks what happened / who said what / why; 3 options in ${input.user.uiLanguage};`,
+        `set "correctIndex"; set "linkedTerm" to the exact word from the list above that the question tests.`,
+        `Day ${day.dayNumber}. Return only the JSON object.`,
+      ].join('\n'),
+      `Write the dialogue and its comprehension questions.`,
+      'story',
+      jsonSchema
+    );
+
+    return { story: r.value, attempts: r.attempts };
   }
 
   async generateLesson(

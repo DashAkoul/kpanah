@@ -1870,7 +1870,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 9;
+export const LESSON_CONTENT_VERSION = 10;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -2638,6 +2638,22 @@ async function ensureLessonContent(
         violations: [...mapForCheck.violations, ...check.violations].slice(-50),
         updatedAt: new Date().toISOString(),
       });
+    }
+  }
+
+  /**
+   * بخش ۳ همیشه باید باشد: اگر مدل در پاسخ اصلی `part3` نداد، یک فراخوانی
+   * کوچک **فقط برای داستان** انجام می‌شود (با واژه‌های همان درس).
+   * ⚠️ اگر این هم شکست بخورد، درس بدون بخش ۳ منتشر می‌شود (block نمی‌کنیم).
+   */
+  if (!aligned.part3) {
+    try {
+      const storyRes = await engine.generateStory(input, day, aligned);
+      if (storyRes.story?.lines?.length) {
+        aligned = { ...aligned, part3: storyRes.story };
+      }
+    } catch {
+      /* بخش ۳ اختیاری است */
     }
   }
 

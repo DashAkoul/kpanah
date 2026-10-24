@@ -460,6 +460,36 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** نقش‌آفرینی */
+  roleplayStart: () =>
+    callApi<{ scenario: string; aiRole: string; userRole: string; opening: string; goal: string }>(
+      'roleplay-start',
+      { method: 'POST', body: {} }
+    ),
+
+  roleplayTurn: (body: {
+    scenario: string;
+    goal: string;
+    aiRole: string;
+    userRole: string;
+    transcript: { role: 'ai' | 'user'; text: string }[];
+  }) => callApi<{ reply: string }>('roleplay-turn', { method: 'POST', body }),
+
+  roleplayFinish: (body: {
+    scenario: string;
+    goal: string;
+    aiRole: string;
+    userRole: string;
+    transcript: { role: 'ai' | 'user'; text: string }[];
+  }) =>
+    callApi<{
+      verdict: 'PASS' | 'PARTIAL' | 'FAIL';
+      score: number;
+      strengths: string[];
+      corrections: { original: string; fixed: string; note?: string }[];
+      summary: string;
+    }>('roleplay-finish', { method: 'POST', body }),
+
   /** مرور تأخیری — سنجش ماندگاری */
   delayedCheck: () =>
     callApi<{

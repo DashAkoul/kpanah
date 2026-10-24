@@ -1,6 +1,9 @@
 import type { z } from 'zod';
 import {
   calibrationTestSchema,
+  roleplayStartSchema,
+  roleplayTurnSchema,
+  roleplayFinishSchema,
   storyPartSchema,
   freeWriteResultSchema,
   generatedCycleSchema,
@@ -272,6 +275,170 @@ export class AiEngine {
    * می‌شود (خروجی کوچک) و متن از واژه‌های همان درس استفاده می‌کند تا
    * جمله‌های بی‌ربط تولید نشود.
    */
+  // ── نقش‌آفرینی (گفت‌وگوی آزاد متنی) ─────────────────────────────
+
+  async startRoleplay(input: CycleGenerationInput): Promise<{
+    start: { scenario: string; aiRole: string; userRole: string; opening: string; goal: string } | null;
+    attempts: AiAttempt[];
+  }> {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        scenario: { type: 'string' },
+        aiRole: { type: 'string' },
+        userRole: { type: 'string' },
+        opening: { type: 'string' },
+        goal: { type: 'string' },
+      },
+      required: ['scenario', 'aiRole', 'userRole', 'opening', 'goal'],
+    };
+
+    const r = await this.runChain(
+      roleplayStartSchema,
+      [
+        `You set up a short role-play for a language learner.`,
+        `Target language: ${input.user.targetLanguage}. Learner UI language: ${input.user.uiLanguage}.`,
+        `Level: ${input.user.skillLevel}. Learner goal: ${input.user.learningGoal ?? 'daily conversation'}.`,
+        ``,
+        `Create ONE realistic situation where the learner must speak to get something done`,
+        `(ordering, asking directions, a hotel desk, a job interview — match the goal).`,
+        `- "scenario": one sentence in ${input.user.uiLanguage}`,
+        `- "aiRole" / "userRole": short labels in ${input.user.uiLanguage}`,
+        `- "opening": the AI's first line IN THE TARGET LANGUAGE (max 15 words, level-appropriate)`,
+        `- "goal": one sentence in ${input.user.uiLanguage} describing what the learner must achieve`,
+        `Return only the JSON object.`,
+      ].join('\n'),
+      `Set up the role-play.`,
+      'roleplay-start',
+      jsonSchema
+    );
+
+    return { start: r.value, attempts: r.attempts };
+  }
+
+  /**
+   * پاسخ در نقش — **بدون اصلاح خطا** در میانهٔ گفت‌وگو.
+   * ⚠️ اصلاح وسط مکالمه، روانی را می‌شکند؛ بازخورد در پایان داده می‌شود.
+   */
+  async roleplayReply(input: {
+    targetLanguage: string;
+    uiLanguage: string;
+    level: string;
+    scenario: string;
+    goal: string;
+    aiRole: string;
+    userRole: string;
+    transcript: { role: 'ai' | 'user'; text: string }[];
+  }): Promise<{ reply: string | null; attempts: AiAttempt[] }> {
+    const jsonSchema = {
+      type: 'object',
+      properties: { reply: { type: 'string' } },
+      required: ['reply'],
+    };
+
+    const lines = input.transcript
+      .map((t) => `${t.role === 'ai' ? input.aiRole : input.userRole}: ${t.text}`)
+      .join('\n');
+
+    const r = await this.runChain(
+      roleplayTurnSchema,
+      [
+        `You are playing ${input.aiRole} in a role-play. Stay in character.`,
+        `Situation: ${input.scenario}`,
+        `The learner plays ${input.userRole}; their goal: ${input.goal}.`,
+        `Speak ONLY in ${input.targetLanguage}, at level ${input.level}.`,
+        ``,
+        `Rules:`,
+        `- 1-2 short sentences. React to what the learner actually said.`,
+        `- End with a question or a prompt that keeps the exchange going.`,
+        `- Do NOT correct grammar here and do NOT switch to ${input.uiLanguage}.`,
+        `- If the learner's message is incomprehensible, ask them to repeat or clarify`,
+        `  (still in ${input.targetLanguage}, simply).`,
+        `Return only the JSON object.`,
+      ].join('\n'),
+      `Conversation so far://n${lines}//n//nYour reply:`,
+      'roleplay-turn',
+      jsonSchema
+    );
+
+    return { reply: r.value?.reply ?? null, attempts: r.attempts };
+  }
+
+  /** ارزیابی پایانی — آیا کاربر به هدف رسید و چه چیزی باید اصلاح شود */
+  async evaluateRoleplay(input: {
+    targetLanguage: string;
+    uiLanguage: string;
+    level: string;
+    scenario: string;
+    goal: string;
+    userRole: string;
+    aiRole: string;
+    transcript: { role: 'ai' | 'user'; text: string }[];
+  }): Promise<{
+    result: {
+      verdict: 'PASS' | 'PARTIAL' | 'FAIL';
+      score: number;
+      strengths: string[];
+      corrections: { original: string; fixed: string; note?: string }[];
+      summary: string;
+    } | null;
+    attempts: AiAttempt[];
+  }> {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        verdict: { type: 'string', enum: ['PASS', 'PARTIAL', 'FAIL'] },
+        score: { type: 'number', minimum: 0, maximum: 1 },
+        strengths: { type: 'array', items: { type: 'string' }, maxItems: 3 },
+        corrections: {
+          type: 'array',
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              original: { type: 'string' },
+              fixed: { type: 'string' },
+              note: { type: 'string' },
+            },
+            required: ['original', 'fixed'],
+          },
+        },
+        summary: { type: 'string' },
+      },
+      required: ['verdict', 'score', 'strengths', 'corrections', 'summary'],
+    };
+
+    const lines = input.transcript
+      .map((t) => `${t.role === 'ai' ? input.aiRole : input.userRole}: ${t.text}`)
+      .join('\n');
+
+    const r = await this.runChain(
+      roleplayFinishSchema,
+      [
+        `You are assessing a finished role-play.`,
+        `Situation: ${input.scenario}`,
+        `Learner role: ${input.userRole}. Goal: ${input.goal}. Level: ${input.level}.`,
+        `Target language: ${input.targetLanguage}. Write feedback in ${input.uiLanguage}.`,
+        ``,
+        `Rules:`,
+        `- verdict PASS if the learner achieved the goal and was understandable.`,
+        `- PARTIAL if the goal was mostly met but there are real errors.`,
+        `- FAIL only if the goal was not met.`,
+        `- "strengths": 1-3 concrete things they did well (not generic praise).`,
+        `- "corrections": up to 4 REAL errors from the transcript — quote exactly what they wrote`,
+        `  in "original", give the minimal fix in "fixed", and a short "note" in ${input.uiLanguage}.`,
+        `  Never invent errors that are not in the transcript.`,
+        `- "summary": one or two sentences in ${input.uiLanguage}.`,
+        `Return only the JSON object.`,
+      ].join('\n'),
+      `Transcript://n${lines}`,
+      'roleplay-finish',
+      jsonSchema
+    );
+
+    return { result: r.value, attempts: r.attempts };
+  }
+
   async generateStory(
     input: CycleGenerationInput,
     day: OutlineDay,

@@ -1216,9 +1216,16 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `  example (identical to "example"); the other two use the SAME term wrongly`,
     `  (wrong collocation, wrong register, or wrong meaning in context).`,
     `  Set "correctIndex" accordingly.`,
+    `- "wordOrder" (on at least 2 items per lesson): build a 4-6 word sentence that uses`,
+    `  the term. "answer" = the sentence split into tokens in the CORRECT order.`,
+    `  "words" = those same tokens SHUFFLED, plus 2 distractor words that do NOT belong`,
+    `  in the sentence (so the learner must choose). Tokens must be identical strings`,
+    `  in both arrays. Never repeat a token in "answer".`,
     `- "listeningOptions" (on at least 2 items per lesson): 3 DIFFERENT terms from this`,
     `  lesson, one of which is exactly this item's term; set "correctIndex" to its index.`,
     `  (The learner hears the term and must pick which word it was.)`,
+    `  ⚠️ Distractors must be PHONETICALLY SIMILAR to the term (minimal pairs / same`,
+    `  syllable shape), never obviously unrelated words. Otherwise the item is trivial.`,
     `- "collocations": 2-3 natural word partners for the term (target language).`,
     `  "synonyms": 1-3 true synonyms at the same level (omit if none). Never invent.`,
     `- "freeWrite" (on at least 2 items per lesson): a short writing task —`,
@@ -1226,6 +1233,9 @@ function pedagogyBlock(input: CycleGenerationInput): string {
     `  the term, "mustUse" = the exact term, "minWords" 3-6, and "sampleAnswer"`,
     `  (one natural sentence). Keep it doable at this level.`,
     `- "substitution": "base" is a short frame containing ___ ; "slots" has exactly 3`,
+    `  options of the SAME grammatical category as the missing word (inflections or`,
+    `  plausible collocations), never random unrelated words — otherwise the answer is`,
+    `  obvious and the drill teaches nothing.`,
     `  completions of which EXACTLY ONE is correct (grammatical AND appropriate).`,
     `  The two wrong ones must look similar (same length/register) so the answer is not`,
     `  guessable. NEVER put the lesson's "example" sentence — or a full sentence — in`,
@@ -1331,6 +1341,20 @@ function buildLessonUserPrompt(
   const profile = dayProfile(day.dayNumber);
   const objective = day.objective ?? profile.objective;
 
+  /**
+   * ⚠️ بودجهٔ زمانی کاربر باید **اندازهٔ درس** را تعیین کند.
+   * قبلاً فقط یک جملهٔ راهنما بود و درسِ ۱۵–۳۰ دقیقه‌ای در ۴ دقیقه تمام
+   * می‌شد. حالا تعداد آیتم/سؤال از دقیقه‌ها مقیاس می‌گیرد.
+   * هر آیتم با مثال/الگو/تولید ≈ ۳ دقیقه، هر سؤال ≈ ۱٫۵ دقیقه.
+   */
+  const minutes = input.user.dailyMinutes ?? 15;
+  const scale = minutes <= 10 ? 0.8 : minutes <= 20 ? 1.2 : minutes <= 30 ? 1.6 : 2;
+  const clampInt = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(n)));
+  const itemsMin = clampInt(profile.items.min * scale, 3, 6);
+  const itemsMax = clampInt(profile.items.max * scale, itemsMin, 7);
+  const qMin = clampInt(profile.part2.min * scale, 3, 10);
+  const qMax = clampInt(profile.part2.max * scale, qMin, 12);
+
   return [
     `Cycle: ${outline.title} — ${outline.focusSummary}`,
     `Full outline: ${outline.days.map((d) => `D${d.dayNumber}(${d.kind}) ${d.title}`).join(' | ')}`,
@@ -1342,10 +1366,10 @@ function buildLessonUserPrompt(
     deltaBlock(input, true),
     '',
     `Content budget for this day (do not exceed):`,
-    `- learner's daily time: about ${input.user.dailyMinutes ?? 15} minutes. Keep the`,
-    `  whole lesson inside it — fewer items beats a lesson that gets cut off.`,
-    `- part1 items: ${profile.items.min}-${profile.items.max}`,
-    `- part2 questions: ${profile.part2.min}-${profile.part2.max}`,
+    `- learner's daily time: about ${minutes} minutes. The lesson MUST fill it —`,
+    `  a lesson that finishes in a third of the time is a failed lesson.`,
+    `- part1 items: exactly ${itemsMin}-${itemsMax} (each item ≈ 3 minutes of work)`,
+    `- part2 questions: exactly ${qMin}-${qMax}`,
     `- share of items that must be BRAND NEW: ${Math.round(profile.newItemRatio * 100)}%`,
     `- the rest must REVIEW items from earlier days of this cycle.`,
     '',
@@ -1508,6 +1532,14 @@ function patternDrillItemJson(): Record<string, unknown> {
           correctIndex: { type: 'integer', minimum: 0, maximum: 2 },
         },
         required: ['base', 'slots', 'correctIndex'],
+      },
+      wordOrder: {
+        type: 'object',
+        properties: {
+          words: { type: 'array', items: { type: 'string' }, minItems: 4, maxItems: 10 },
+          answer: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 8 },
+        },
+        required: ['words', 'answer'],
       },
       listeningOptions: {
         type: 'object',

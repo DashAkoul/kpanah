@@ -136,6 +136,9 @@ export function LessonPlayer({
     feedback: string;
     corrected?: string;
   } | null>(null);
+  /** ساخت جمله با چیدن واژه‌ها — ارزیابی قطعی، بدون AI */
+  const [builtIdx, setBuiltIdx] = useState<number[]>([]);
+  const [buildResult, setBuildResult] = useState<{ correct: boolean } | null>(null);
 
   /**
    * ⚠️ ادامه از همان‌جا که کاربر خارج شد.
@@ -199,6 +202,22 @@ export function LessonPlayer({
   const currentItem: PatternDrillItem | undefined = part1Items[itemIndex];
   const currentChoice = choiceFor(currentItem, p1Step);
 
+  /** بررسی جملهٔ ساخته‌شده — مقایسهٔ قطعی، بدون فراخوانی AI */
+  const checkBuild = useCallback(() => {
+    const wo = currentItem?.wordOrder;
+    if (!currentItem || !wo) return;
+    const built = builtIdx.map((i) => wo.words[i]).join(' ').trim().toLowerCase();
+    const correct = built === wo.answer.join(' ').trim().toLowerCase();
+    setBuildResult({ correct });
+    session.recordAnswer({
+      itemId: `build-${itemIndex}`,
+      isCorrect: correct,
+      linkedTerm: currentItem.term,
+      usedHint: false,
+    });
+    haptic(correct ? 'success' : 'error');
+  }, [currentItem, builtIdx, itemIndex, session]);
+
   /** ارسال پاسخ آزاد برای ارزیابی */
   const submitFreeWrite = useCallback(async () => {
     const fw = currentItem?.freeWrite;
@@ -247,6 +266,8 @@ export function LessonPlayer({
       setListenChecked(false);
       setWriteText('');
       setWriteResult(null);
+      setBuiltIdx([]);
+      setBuildResult(null);
       session.markItemStart();
       return;
     }
@@ -302,6 +323,8 @@ export function LessonPlayer({
       if (next === 'write') {
         setWriteText('');
         setWriteResult(null);
+        setBuiltIdx([]);
+        setBuildResult(null);
       }
       session.markItemStart();
       return;
@@ -494,18 +517,85 @@ export function LessonPlayer({
           <p className="mb-2 text-sm font-semibold leading-relaxed text-text">
             {currentItem.freeWrite.prompt}
           </p>
-          <textarea
-            value={writeText}
-            onChange={(e) => setWriteText(e.target.value)}
-            disabled={Boolean(writeResult)}
-            rows={3}
-            dir="ltr"
-            placeholder={t('lesson.freeWritePlaceholder')}
-            className="target-text w-full rounded-xl border border-border bg-card p-3 text-sm text-text outline-none focus:border-brand-500"
-          />
-          <p className="mt-1 text-[10px] text-text-muted">
-            {t('lesson.freeWriteHint', { term: currentItem.freeWrite.mustUse })}
-          </p>
+          {currentItem.wordOrder ? (
+            <>
+              {/* خط پاسخ */}
+              <div
+                className="min-h-[52px] rounded-xl border border-dashed border-border bg-[var(--surface-sunken)] p-2"
+                dir="ltr"
+              >
+                {builtIdx.length === 0 ? (
+                  <p className="text-[11px] text-text-muted">{t('lesson.buildHint')}</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {builtIdx.map((wi, pos) => (
+                      <button
+                        key={`${wi}-${pos}`}
+                        type="button"
+                        disabled={Boolean(buildResult)}
+                        onClick={() => setBuiltIdx(builtIdx.filter((_, k) => k !== pos))}
+                        className="target-text rounded-lg bg-brand-500 px-2 py-1 text-xs font-semibold text-white"
+                      >
+                        {currentItem.wordOrder!.words[wi]}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* واژه‌های موجود */}
+              <div className="mt-2 flex flex-wrap gap-1.5" dir="ltr">
+                {currentItem.wordOrder.words.map((w, wi) =>
+                  builtIdx.includes(wi) ? null : (
+                    <button
+                      key={`${w}-${wi}`}
+                      type="button"
+                      disabled={Boolean(buildResult)}
+                      onClick={() => setBuiltIdx([...builtIdx, wi])}
+                      className="target-text rounded-lg border border-border bg-card px-2 py-1 text-xs text-text"
+                    >
+                      {w}
+                    </button>
+                  )
+                )}
+              </div>
+
+              {buildResult && (
+                <div
+                  className={clsx(
+                    'mt-2 rounded-xl border p-2.5',
+                    buildResult.correct
+                      ? 'border-success-500/30 bg-success-100/50 text-[#052e16]'
+                      : 'border-danger-500/30 bg-danger-100/50 text-[#4c0519]'
+                  )}
+                >
+                  <p className="text-xs font-semibold">
+                    {buildResult.correct ? t('lesson.correct') : t('lesson.incorrect')}
+                  </p>
+                  {!buildResult.correct && (
+                    <p className="target-text mt-1 text-xs" dir="ltr">
+                      {currentItem.wordOrder.answer.join(' ')}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <textarea
+                value={writeText}
+                onChange={(e) => setWriteText(e.target.value)}
+                disabled={Boolean(writeResult)}
+                rows={3}
+                dir="ltr"
+                placeholder={t('lesson.freeWritePlaceholder')}
+                className="target-text w-full rounded-xl border border-border bg-card p-3 text-sm text-text outline-none focus:border-brand-500"
+              />
+              <p className="mt-1 text-[10px] text-text-muted">
+                {t('lesson.freeWriteHint', { term: currentItem.freeWrite.mustUse })}
+              </p>
+            </>
+          )}
 
           {writeResult && (
             <div
@@ -581,9 +671,17 @@ export function LessonPlayer({
           <Part1Actions
             step={p1Step}
             writeBusy={writeBusy}
-            writeDone={Boolean(writeResult)}
-            canSubmitWrite={writeText.trim().length >= 3}
-            onSubmitWrite={() => void submitFreeWrite()}
+            writeDone={
+              currentItem?.wordOrder ? Boolean(buildResult) : Boolean(writeResult)
+            }
+            canSubmitWrite={
+              currentItem?.wordOrder
+                ? builtIdx.length === (currentItem.wordOrder.answer.length ?? 0)
+                : writeText.trim().length >= 3
+            }
+            onSubmitWrite={() =>
+              currentItem?.wordOrder ? checkBuild() : void submitFreeWrite()
+            }
             hasChoice={Boolean(
               currentItem.meaningOptions ||
                 currentItem.exampleOptions ||
@@ -825,21 +923,31 @@ function PatternItemView({
     <div className="space-y-4">
       {/* کارت واژه — معنی/مثال فقط بعد از پاسخ‌دادن آشکار می‌شود */}
       <Card className="text-center">
-        <p className="text-xs text-text-hint">{t('lesson.term')}</p>
+        {/**
+         * ⚠️ در تمرین شنیداری، نمایش واژه سؤال را بی‌معنا می‌کند
+         * (کاربر جواب را می‌بیند). پس کارت واژه در آن مرحله پنهان می‌شود.
+         */}
+        {step === 'listen' ? (
+          <p className="py-2 text-2xl">🎧</p>
+        ) : (
+          <>
+            <p className="text-xs text-text-hint">{t('lesson.term')}</p>
 
-        <h2 className="target-text mt-2 text-2xl font-bold leading-tight text-text" dir="ltr">
-          {item.term}
-        </h2>
+            <h2 className="target-text mt-2 text-2xl font-bold leading-tight text-text" dir="ltr">
+              {item.term}
+            </h2>
 
-        <div className="mt-2 flex items-center justify-center gap-2">
-          {/* ⚠️ باگ رفع‌شده: قبلاً speakText (که مثال بود) خوانده می‌شد */}
-          <SpeakButton text={item.term} />
-        </div>
+            <div className="mt-2 flex items-center justify-center gap-2">
+              {/* ⚠️ باگ رفع‌شده: قبلاً speakText (که مثال بود) خوانده می‌شد */}
+              <SpeakButton text={item.term} />
+            </div>
 
-        {item.pronunciation && (
-          <p className="target-text mt-1 text-xs text-text-muted" dir="ltr">
-            /{item.pronunciation}/
-          </p>
+            {item.pronunciation && (
+              <p className="target-text mt-1 text-xs text-text-muted" dir="ltr">
+                /{item.pronunciation}/
+              </p>
+            )}
+          </>
         )}
 
         {showDetails && (
@@ -1010,8 +1118,13 @@ function ChoiceList({
               'w-full rounded-xl border p-3 text-start transition-all active:scale-[0.99]',
               !checked && isSelected && 'border-brand-500 bg-brand-50',
               !checked && !isSelected && 'border-border bg-card',
-              checked && isCorrect && 'border-success-500 bg-success-100',
-              checked && isSelected && !isCorrect && 'border-danger-500 bg-danger-100',
+              // ⚠️ متن باید تیره شود؛ وگرنه در تم تاریک، متن روشن روی
+              // پس‌زمینهٔ سبز/قرمز روشن ناخوانا می‌شود (باگ گزارش‌شده).
+              checked && isCorrect && 'border-success-500 bg-success-100 text-[#052e16]',
+              checked &&
+                isSelected &&
+                !isCorrect &&
+                'border-danger-500 bg-danger-100 text-[#4c0519]',
               checked && !isCorrect && !isSelected && 'border-border bg-card opacity-60'
             )}
           >

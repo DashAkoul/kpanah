@@ -155,6 +155,8 @@ export interface PatternDrillItem {
   meaningOptions?: { options: string[]; correctIndex: number };
   /** گزینه‌های مثال (۱ درست + ۲ انحرافی) */
   exampleOptions?: { options: string[]; correctIndex: number };
+  /** گزینه‌های شنیداری (۳ واژه، یکی خودِ همین آیتم) */
+  listeningOptions?: { options: string[]; correctIndex: number };
   /** شبکهٔ واژگان — ترکیب‌های رایج و مترادف‌ها */
   collocations?: string[];
   synonyms?: string[];

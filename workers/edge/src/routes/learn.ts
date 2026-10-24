@@ -36,6 +36,7 @@ import type {
 import type { RequestContext } from '../types';
 import { jsonError, jsonSuccess, readJson } from '../lib/response';
 import { errorTypeFor, skillFor } from '../services/error-taxonomy';
+import { throttleAi } from '../services/ai-throttle';
 import {
   appendDecision,
   buildLearningMap,
@@ -541,17 +542,30 @@ export async function handleCompleteLesson(
       responseMs: answer.responseMs,
     });
 
+    /**
+     * فاصلهٔ تطبیقی (۱۸.۷): کاربری که مکرراً فراموش می‌کند فاصلهٔ کوتاه‌تر
+     * می‌گیرد، و کسی که روان است فاصلهٔ کمی بلندتر. قاعده در همین‌جا و
+     * قابل‌آزمون است (فاصلهٔ پایه از `applyLeitnerReview` می‌آید).
+     */
+    const lapses = review.lapses ?? 0;
+    const adaptiveInterval = (() => {
+      const base = review.intervalDays ?? 1;
+      if (lapses >= 3) return Math.max(1, Math.floor(base / 2));
+      if (lapses === 0 && (review.ease ?? 2.5) > 2.8) return Math.ceil(base * 1.2);
+      return base;
+    })();
+
     updates.set(term, {
       term,
       box: review.box,
       ease: review.ease,
       repetitions: review.repetitions,
       lapses: review.lapses,
-      intervalDays: review.intervalDays,
+      intervalDays: adaptiveInterval,
       mastered: review.mastered,
       successCount: (existing?.success_count ?? 0) + (answer.isCorrect ? 1 : 0),
       failCount: (existing?.fail_count ?? 0) + (answer.isCorrect ? 0 : 1),
-      nextReviewAt: nextReviewDate(review.intervalDays).toISOString(),
+      nextReviewAt: nextReviewDate(adaptiveInterval).toISOString(),
     });
   }
 
@@ -569,9 +583,15 @@ export async function handleCompleteLesson(
   // هدف و مرحلهٔ جاری — برای ردیابی «این پاسخ به کدام هدف مربوط بود»
   let lessonObjective: string | null = lesson.objective ?? null;
   let lessonStage: string | null = null;
+  /** نگاشت مهارت → شناسهٔ هدف مرحله (برای ردیابی شاهد هر هدف) */
+  const objectiveBySkill = new Map<string, string>();
   try {
     const currentMap = await r.getLearningMap(user.id);
     lessonStage = currentMap?.currentStageId ?? null;
+    const stageNow = currentMap ? currentStage(currentMap) : null;
+    for (const obj of stageNow?.objectives ?? []) {
+      objectiveBySkill.set(obj.skill, obj.id);
+    }
   } catch {
     /* best-effort */
   }
@@ -596,6 +616,7 @@ export async function handleCompleteLesson(
         ...(a.usedHint ? { usedHint: true } : {}),
         errorType: errorTypeFor(a.itemId, a.isCorrect, Boolean(a.usedHint)),
         objective: lessonObjective,
+        objectiveId: objectiveBySkill.get(skillFor(a.itemId) ?? '') ?? null,
         stage: lessonStage,
         day: lesson.day_number,
       },
@@ -1007,6 +1028,11 @@ export async function handleRoleplayStart(
   const input = await buildGenerationInput(r, user, 1);
   if (!input) return jsonError('INTERNAL_ERROR', 'could not build input', requestId, env, 500);
 
+  const gate = throttleAi(user.id, 'roleplay-start', 6);
+  if (!gate.ok) {
+    return jsonError('RATE_LIMITED', 'too many requests', requestId, env, 429, 'errors.rateLimited');
+  }
+
   const engine = await textEngine(env, r);
   if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
 
@@ -1029,6 +1055,11 @@ export async function handleRoleplayTurn(
   const parsed = roleplayTurnRequestSchema.safeParse(await readJson(request));
   if (!parsed.success) {
     return jsonError('VALIDATION_ERROR', 'invalid roleplay payload', requestId, env, 400);
+  }
+
+  const gate = throttleAi(user.id, 'roleplay-turn', 20);
+  if (!gate.ok) {
+    return jsonError('RATE_LIMITED', 'too many requests', requestId, env, 429, 'errors.rateLimited');
   }
 
   const engine = await textEngine(env, r);
@@ -1095,6 +1126,11 @@ export async function handleRoleplayFinish(
           verdict: res.result.verdict,
           score: res.result.score,
           turns: parsed.data.transcript.filter((t) => t.role === 'user').length,
+          // ⚠️ متن مکالمه برای بازرسی بعدی (۱۶.۴) — محدود و کوتاه
+          transcript: parsed.data.transcript.slice(-8).map((t) => ({
+            role: t.role,
+            text: t.text.slice(0, 200),
+          })),
         },
       },
     ]);
@@ -1192,6 +1228,68 @@ export async function handleDelayedSubmit(
     /* best-effort */
   }
 
+  /**
+   * ⚠️ شکست در مرور تأخیری باید **اقدام** کند، نه فقط ثبت (۱۱.۷).
+   * اقدام‌ها: یک پله تنزل جعبه، کوتاه‌شدن فاصلهٔ مرور، ثبت تصمیم و
+   * علامت‌گذاری مرحله به‌عنوان «نیازمند تقویت».
+   */
+  const wrongTerms = answers
+    .filter((a) => a.isCorrect === false && a.term)
+    .map((a) => String(a.term));
+
+  if (wrongTerms.length > 0) {
+    try {
+      const lex = await r.getLexicalItems(user.id, user.target_language);
+      const byTerm = new Map(lex.map((l) => [l.term, l]));
+      const intervals = [0, 1, 3, 7, 21];
+
+      for (const term of wrongTerms) {
+        const cur = byTerm.get(term);
+        if (!cur) continue;
+        const box = Math.max(1, (cur.box ?? 1) - 1);
+        const interval = intervals[box - 1] ?? 1;
+        await r
+          .upsertLexicalItem(user.id, user.target_language, {
+            term,
+            box,
+            ease: Math.max(1.3, (cur.ease ?? 2.5) - 0.2),
+            repetitions: cur.repetitions ?? 0,
+            lapses: (cur.lapses ?? 0) + 1,
+            intervalDays: interval,
+            mastered: false,
+            successCount: cur.success_count ?? 0,
+            failCount: (cur.fail_count ?? 0) + 1,
+            nextReviewAt: nextReviewDate(interval).toISOString(),
+          })
+          .catch(() => undefined);
+      }
+
+      let map = await ensureLearningMap(r, user);
+      const stage = currentStage(map);
+      map = appendDecision(map, {
+        scope: 'REVIEW',
+        ruleId: 'RETENTION_FAILED_V1',
+        inputs: {
+          failed: wrongTerms.length,
+          total: answers.length,
+          stage: stage.id,
+        },
+        output: 'DEMOTE_BOX_AND_NEEDS_WORK',
+        reason: `${wrongTerms.length} واژه در مرور تأخیری فراموش شد؛ جعبه تنزل و مرحله نیازمند تقویت شد`,
+        confidence: 0.8,
+      });
+      map = {
+        ...map,
+        stages: map.stages.map((st) =>
+          st.id === stage.id ? { ...st, status: 'NEEDS_WORK' as const } : st
+        ),
+      };
+      await r.saveLearningMap(user.id, map);
+    } catch {
+      /* best-effort */
+    }
+  }
+
   return jsonSuccess({ recorded: answers.length }, requestId, env);
 }
 
@@ -1217,6 +1315,18 @@ export async function handleEvaluateFreeWrite(
   const parsed = freeWriteSubmitSchema.safeParse(await readJson(request));
   if (!parsed.success) {
     return jsonError('VALIDATION_ERROR', 'invalid free-write payload', requestId, env, 400);
+  }
+
+  const gate = throttleAi(user.id, 'free-write', 12);
+  if (!gate.ok) {
+    return jsonError(
+      'RATE_LIMITED',
+      `too many requests, retry in ${gate.retryAfterSec}s`,
+      requestId,
+      env,
+      429,
+      'errors.rateLimited'
+    );
   }
 
   const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
@@ -2133,7 +2243,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 10;
+export const LESSON_CONTENT_VERSION = 11;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -2810,6 +2920,29 @@ async function ensureLessonContent(
   let aligned = await alignTermCards(r, input, res.lesson);
 
   /**
+   * اعتبارسنجی شنیداری: گزینهٔ درست باید دقیقاً خودِ واژهٔ آیتم باشد،
+   * وگرنه سؤال بی‌معنا می‌شود → حذف.
+   */
+  aligned = {
+    ...aligned,
+    part1: {
+      ...aligned.part1,
+      items: (aligned.part1?.items ?? []).map((it) => {
+        const lo = it.listeningOptions;
+        if (!lo) return it;
+        const idx = lo.correctIndex ?? -1;
+        const picked = lo.options?.[idx];
+        if (!picked || picked.trim().toLowerCase() !== it.term.trim().toLowerCase()) {
+          const { listeningOptions: _drop, ...rest } = it;
+          void _drop;
+          return rest as typeof it;
+        }
+        return it;
+      }),
+    },
+  };
+
+  /**
    * ⚠️ اعتبارسنجی **فعال** نسبت به نقشه: هر سؤالی که به واژه‌ای بیرون از
    * بخش ۱ ارجاع دهد حذف می‌شود (نه فقط ثبت). این جلوی «محتوا خارج از نقشه»
    * را می‌گیرد بدون اینکه کاربر بدون درس بماند.
@@ -2847,9 +2980,18 @@ async function ensureLessonContent(
   const duplicateViolation = await (async () => {
     try {
       const siblings = await r.getLessonsForCycle(cycleId);
-      const prev = siblings
+      const siblingPrev = siblings
         .filter((l) => l.day_number < day.dayNumber && l.part_1_data)
         .sort((a, b) => b.day_number - a.day_number)[0];
+
+      /**
+       * ⚠️ اگر روز اولِ چرخه باشد، با آخرین درس تکمیل‌شدهٔ کاربر مقایسه
+       * می‌کنیم (حتی از چرخهٔ قبل) تا تکرار بین چرخه‌ها هم دیده شود.
+       */
+      const crossCycle = siblingPrev ? null : await r.getOlderCompletedLesson(input.user.id, 0);
+      const prev = siblingPrev ?? (crossCycle
+        ? ({ day_number: crossCycle.day_number, part_1_data: crossCycle.part_1_data } as unknown as typeof siblingPrev)
+        : undefined);
       if (!prev) return null;
 
       const prevTerms = new Set(

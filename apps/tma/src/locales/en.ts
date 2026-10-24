@@ -66,6 +66,16 @@ export default {
       note: 'This is not a score — it only sets your starting point.',
       startLearning: 'Start learning',
     },
+    delayed: {
+      cardTitle: 'Still remember?',
+      cardHint: '2 questions from a lesson a few days ago — no hints',
+      open: 'Start',
+      title: 'Delayed recall',
+      none: 'No lesson older than 2 days yet',
+      fromDay: 'From day {{day}}',
+      result: '{{correct}} of {{total}} correct',
+      resultHint: 'This reflects retention, not speed or intelligence.',
+    },
     learn: {
       stageOf: 'Stage {{current}} of {{total}}',
       part3: 'Part 3: short story',
@@ -187,7 +197,19 @@ export default {
     panel: {
       coins: 'Coins',
     },
-    profile: {      wordsMasteredTitle: 'Mastered words',
+    errorTypes: {
+      VOCABULARY: 'Vocabulary',
+      GRAMMAR: 'Grammar',
+      APPLICATION: 'Application',
+      PRODUCTION: 'Production',
+      COMPREHENSION: 'Comprehension',
+      OTHER: 'Other',
+    },
+    profile: {
+      quality: 'Learning quality',
+      retention: 'Retention (delayed recall)',
+      helpRate: 'Dependence on hints',
+      qualityHint: 'Retention comes from delayed recall, not lesson count. Hint dependence = share of correct answers that needed help.',      wordsMasteredTitle: 'Mastered words',
       wordsLearningTitle: 'Words in progress',
       boxOf: 'Box {{box}}/5',
       dueToday: 'Review: today',

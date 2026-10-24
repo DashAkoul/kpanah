@@ -1018,17 +1018,28 @@ export class ContentRepository {
     userId: string,
     sinceIso: string,
     limit = 5000
-  ): Promise<{ event_type: string; is_correct: boolean | null; response_ms: number | null; pause_ms: number | null }[]> {
+  ): Promise<
+    {
+      event_type: string;
+      item_id: string | null;
+      is_correct: boolean | null;
+      response_ms: number | null;
+      pause_ms: number | null;
+      payload: Record<string, unknown> | null;
+    }[]
+  > {
     try {
       const rows = await this.db.select<{
         event_type: string;
+        item_id: string | null;
         is_correct: boolean | null;
         response_ms: number | null;
         pause_ms: number | null;
+        payload: Record<string, unknown> | null;
       }>('telemetry_events', {
         user_id: `eq.${userId}`,
         created_at: `gte.${sinceIso}`,
-        select: 'event_type,is_correct,response_ms,pause_ms',
+        select: 'event_type,item_id,is_correct,response_ms,pause_ms,payload',
         limit: String(limit),
       });
       return asRows(rows);
@@ -1038,6 +1049,35 @@ export class ContentRepository {
   }
 
   /** دروس تکمیل‌شدهٔ کاربر (برای دقایق و فعالیت هفتگی) */
+  /**
+   * یک درس تکمیل‌شده که **حداقل N روز** از اتمامش گذشته — برای سنجش
+   * ماندگاری (بازیابی تأخیری). اگر نبود، null.
+   */
+  async getOlderCompletedLesson(
+    userId: string,
+    minAgeDays = 2
+  ): Promise<{ id: string; day_number: number; part_1_data: Record<string, unknown>; completed_at: string } | null> {
+    try {
+      const cutoff = new Date(Date.now() - minAgeDays * 86_400_000).toISOString();
+      const rows = await this.db.select<{
+        id: string;
+        day_number: number;
+        part_1_data: Record<string, unknown>;
+        completed_at: string;
+      }>('lessons', {
+        user_id: `eq.${userId}`,
+        is_completed: 'eq.true',
+        completed_at: `lt.${cutoff}`,
+        select: 'id,day_number,part_1_data,completed_at',
+        order: 'completed_at.desc',
+        limit: '1',
+      });
+      return asRows(rows)[0] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async listCompletedLessons(
     userId: string
   ): Promise<{ day_number: number; duration_seconds: number | null; completed_at: string | null }[]> {

@@ -798,6 +798,12 @@ export interface ProgressDashboard {
   wordLists?: { mastered: WordListEntry[]; learning: WordListEntry[] };
   /** پیشرفت هر توانایی نسبت به آستانه‌اش */
   skillProgress?: { key: string; current: number; target: number }[];
+  /** پروفایل خطا — دسته‌بندی پاسخ‌های غلط */
+  errorProfile?: { type: string; count: number }[];
+  /** نرخ موفقیت در بازیابی تأخیری (ماندگاری) */
+  delayedRecallPct?: number | null;
+  /** نسبت پاسخ‌های درست با کمک (وابستگی) */
+  helpRatePct?: number | null;
 }
 
 /** بخش ۳ درس — داستان کوتاه + درک مطلب */

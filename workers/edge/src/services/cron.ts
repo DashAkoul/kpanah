@@ -32,7 +32,7 @@ function repo(env: Env): ContentRepository {
 
 export async function runHourlyMaintenance(
   env: Env
-): Promise<{ expired: number; prunedCache: number }> {
+): Promise<{ expired: number; prunedCache: number; stripped: number; deletedOld: boolean }> {
   const r = repo(env);
   const overdue = await r.listOverdueSubscriptions(200);
   if (overdue.length > 0) {
@@ -45,7 +45,16 @@ export async function runHourlyMaintenance(
   // پس این کار فقط «آشغال» را می‌برد، نه محتوای مفید.
   const prunedCache = await r.pruneContentCache(180, 2);
 
-  return { expired: overdue.length, prunedCache };
+  // ── نگهداری تلمتری (حریم خصوصی) ─────────────────────────────────
+  // ⚠️ متن خام پاسخ/مکالمه بعد از ۹۰ روز حذف می‌شود؛ ردیف‌ها بعد از
+  // ۲۴ ماه کاملاً پاک می‌شوند. بدون این، دادهٔ متنی برای همیشه می‌ماند.
+  const textCutoff = new Date(Date.now() - 90 * 86_400_000).toISOString();
+  const stripped = await r.stripOldTelemetryText(textCutoff, 200);
+
+  const deleteCutoff = new Date(Date.now() - 730 * 86_400_000).toISOString();
+  const deletedOld = await r.deleteTelemetryOlderThan(deleteCutoff);
+
+  return { expired: overdue.length, prunedCache, stripped, deletedOld };
 }
 
 // ═════════════════════════════════════════════════════════════════════

@@ -460,6 +460,10 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** وضعیت تولید — پاسخ سبک برای polling */
+  genStatus: () =>
+    callApi<{ generating: boolean; ready: boolean; dayNumber: number | null }>('gen-status'),
+
   /** نقشهٔ ادمین (بازرسی) */
   adminMap: (userId?: string) => {
     const qs = new URLSearchParams();

@@ -652,7 +652,13 @@ export async function handleCompleteLesson(
   await r.unlockNextLesson(lesson.cycle_id, lesson.day_number);
 
   // ── 3.5 پیش‌بارگذاری روز بعد (کاربر هرگز منتظر تولید نماند) ───────
-  await prefetchNextLesson(context, user.id, lesson.cycle_id, lesson.day_number);
+  await prefetchNextLesson(
+    context,
+    user.id,
+    lesson.cycle_id,
+    lesson.day_number,
+    user.streak_count ?? 0
+  );
 
   // ── 4. پاداش و استریک ────────────────────────────────────────────
   const lessonScore = scoreLesson({
@@ -932,6 +938,43 @@ export async function handleRetryCycle(
 }
 
 // ═════════════════════════════════════════════════════════════════════
+// GET /gate?action=gen-status  — پاسخ سبک برای polling
+// ═════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠️ چرا جدا شد: کلاینت هنگام تولید هر ۵ ثانیه `home` را صدا می‌زد و آن
+ * اکشن ~۶ کوئری + خواندن نقشه داشت. این اکشن فقط دو کوئری سبک می‌زند.
+ */
+export async function handleGenStatus(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const cycle = await r.getActiveCycle(user.id);
+  if (!cycle) return jsonSuccess({ generating: false, ready: false, dayNumber: null }, requestId, env);
+
+  const lessons = await r.getLessonsForCycle(cycle.id);
+  const current = lessons.find((l) => !l.is_completed);
+  const ready = Boolean(current && lessonContentReady(current.part_1_data));
+
+  return jsonSuccess(
+    {
+      generating: Boolean(current) && !ready,
+      ready,
+      dayNumber: current?.day_number ?? null,
+    },
+    requestId,
+    env
+  );
+}
+
+// ═════════════════════════════════════════════════════════════════════
 // GET /gate?action=admin-map  (فقط مدیر) — بازرسی نقشهٔ خودِ مدیر
 // ═════════════════════════════════════════════════════════════════════
 
@@ -1037,6 +1080,7 @@ export async function handleRoleplayStart(
   if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
 
   const res = await engine.startRoleplay(input);
+  await recordAttempts(r, null, res.attempts);
   if (!res.start) return jsonError('INTERNAL_ERROR', 'roleplay start failed', requestId, env, 502);
   return jsonSuccess(res.start, requestId, env);
 }
@@ -1072,6 +1116,7 @@ export async function handleRoleplayTurn(
     ...parsed.data,
   });
 
+  await recordAttempts(r, null, res.attempts);
   if (!res.reply) return jsonError('INTERNAL_ERROR', 'roleplay reply failed', requestId, env, 502);
   return jsonSuccess({ reply: res.reply }, requestId, env);
 }
@@ -1105,6 +1150,8 @@ export async function handleRoleplayFinish(
     aiRole: parsed.data.aiRole,
     transcript: parsed.data.transcript,
   });
+
+  await recordAttempts(r, null, res.attempts);
 
   if (!res.result) {
     return jsonError('INTERNAL_ERROR', 'roleplay evaluation failed', requestId, env, 502);
@@ -1346,6 +1393,8 @@ export async function handleEvaluateFreeWrite(
     level: String(user.skill_level ?? 'A1'),
   });
 
+  await recordAttempts(r, null, res.attempts);
+
   if (!res.result) {
     return jsonError('INTERNAL_ERROR', 'evaluation failed', requestId, env, 502);
   }
@@ -1447,6 +1496,7 @@ export async function handleCalibrationTest(
   }
 
   const res = await engine.generateCalibration(input, hard ? 'hard' : 'standard');
+  await recordAttempts(r, null, res.attempts);
   if (!res.test?.items?.length) {
     return jsonError('INTERNAL_ERROR', 'calibration generation failed', requestId, env, 502);
   }
@@ -1931,9 +1981,18 @@ async function prefetchNextLesson(
   context: RequestContext,
   userId: string,
   cycleId: string,
-  completedDay: number
+  completedDay: number,
+  /** استریک کاربر — برای تصمیم «آیا ارزش پیش‌تولید دارد؟» */
+  streakCount = 0
 ): Promise<void> {
   if (completedDay >= CYCLE_LENGTH_DAYS) return; // روز ۷ = پایان چرخه
+
+  /**
+   * ⚠️ بهینه‌سازی هزینه: پیش‌تولید درس فردا برای کاربری که فردا برنمی‌گردد
+   * هدر می‌رود. فقط برای کاربرِ پیوسته (استریک ≥۲) پیش‌تولید می‌کنیم؛
+   * بقیه در اولین باز کردن، inline/صف ساخته می‌شود.
+   */
+  if (streakCount < 2) return;
 
   const nextDay = completedDay + 1;
   const r = repo(context.env);
@@ -2097,7 +2156,8 @@ export async function runCycleGeneration(
  */
 async function recordAttempts(
   r: ContentRepository,
-  cycleId: string,
+  /** null = اکشن خارج از چرخه (کالیبراسیون، پاسخ آزاد، نقش‌آفرینی) */
+  cycleId: string | null,
   attempts: {
     provider: string;
     providerId: string | null;
@@ -2278,7 +2338,12 @@ async function runModularGeneration(
   opts: { firstOnly?: boolean } = {}
 ): Promise<{ ok: boolean; error?: string }> {
   // واریانت چرخه: ۳ نسخه در گردش تا هم صرفه‌جویی کنیم هم درس‌ها یکسان نشوند
-  const variant = ((input.cycleNumber - 1) % 3) + 1;
+  /**
+   * ⚠️ بهینه‌سازی هزینه: قبلاً `((cycleNumber-1)%3)+1` بود ⇒ هر ترکیب
+   * (زبان، سطح، هدف، بخش) سه کلید کش داشت و چرخه‌های ۱/۴/۷ از صفر ساخته
+   * می‌شدند. حالا واریانت فقط با **تلاش مجدد** عوض می‌شود، نه هر چرخه.
+   */
+  const variant = 1;
 
   // ── ۱. نقشهٔ چرخه ────────────────────────────────────────────────
   const outlineKey = outlineCacheKeyFor(input, variant);
@@ -2425,7 +2490,7 @@ function shortHash(input: string): string {
 function weaknessFingerprint(input: CycleGenerationInput, enabled: boolean): string {
   if (!enabled) return 'w0';
   const weak = input.delta.weakTerms
-    .slice(0, 6)
+    .slice(0, 4)
     .map((w) => w.term.trim().toLowerCase())
     .sort()
     .join('|');
@@ -3172,7 +3237,7 @@ export async function runLessonGeneration(
   const engine = new AiEngine(env, chain, 'TEXT');
   if (!engine.hasAnyProvider) return { ok: false, error: 'no AI provider available' };
 
-  const variant = ((cycleNumber - 1) % 3) + 1;
+  const variant = 1;
   const ok = await generateLessonJob(env, r, engine, input, outline, cycleId, day, variant);
   if (!ok) return { ok: false, error: `day ${dayNumber} generation failed` };
 

@@ -40,7 +40,11 @@ export function CalibrationFlow({
     { term: string; isCorrect: boolean; responseMs: number; kind?: 'MEANING' | 'LISTENING' }[]
   >([]);
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [result, setResult] = useState<{ estimated: string; scorePct: number } | null>(null);
+  const [result, setResult] = useState<{
+    estimated: string;
+    scorePct: number;
+    bySkill?: Record<string, { correct: number; total: number }>;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -87,7 +91,7 @@ export function CalibrationFlow({
       setBusy(true);
       try {
         const res = await api.calibrationSubmit({ answers: next });
-        setResult({ estimated: res.estimated, scorePct: res.scorePct });
+        setResult({ estimated: res.estimated, scorePct: res.scorePct, bySkill: res.bySkill });
         haptic('success');
       } catch {
         setError(true);
@@ -134,6 +138,28 @@ export function CalibrationFlow({
               <p className="text-sm text-text-hint">
                 {t('calibration.estimated', { level: result.estimated })}
               </p>
+              {result.bySkill && Object.keys(result.bySkill).length > 0 && (
+                <div className="mt-2 w-full space-y-1">
+                  {(['MEANING', 'LISTENING'] as const).map((k) => {
+                    const row = result.bySkill?.[k];
+                    if (!row) return null;
+                    return (
+                      <div
+                        key={k}
+                        className="flex items-center justify-between rounded-lg bg-[var(--surface-sunken)] px-3 py-1.5"
+                      >
+                        <span className="text-[11px] text-text">
+                          {k === 'MEANING' ? '📖' : '🎧'}{' '}
+                          {t(`calibrationSkill.${k}`)}
+                        </span>
+                        <span className="text-[11px] font-bold text-text">
+                          {row.correct}/{row.total}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
               <p className="max-w-xs text-[11px] leading-relaxed text-text-muted">
                 {t('calibration.note')}
               </p>

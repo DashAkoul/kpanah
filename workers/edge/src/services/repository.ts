@@ -1242,20 +1242,6 @@ export class ContentRepository {
     );
   }
 
-  /** ارزش هر سکه (ریال) — قابل تغییر توسط مدیر */
-  async setCoinValueIrr(value: number): Promise<void> {
-    const current = await this.getEconomySettings();
-    await this.db.insert(
-      'app_settings',
-      {
-        key: 'economy',
-        value: { ...current, coinValueIrr: value },
-        description: 'پارامترهای اقتصاد درون‌برنامه',
-      },
-      { upsertOn: 'key' }
-    );
-  }
-
   async upsertLexicalItem(
     userId: string,
     targetLanguage: string,

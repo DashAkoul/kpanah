@@ -1,3 +1,4 @@
+import { SYSTEM_RULES_VERSION } from '@kpanah/shared';
 import type {
   DecisionRecord,
   GeneratedLesson,
@@ -200,6 +201,7 @@ export function buildLearningMap(input: {
   return {
     id: input.id,
     version: 1,
+    rulesVersion: SYSTEM_RULES_VERSION,
     goal,
     targetLanguage: input.targetLanguage,
     uiLanguage: input.uiLanguage,

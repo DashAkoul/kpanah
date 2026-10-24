@@ -1097,6 +1097,56 @@ export class ContentRepository {
     }
   }
 
+  /**
+   * سیاست نگهداری داده (سند `docs/PRIVACY-AND-RETENTION.md`):
+   * متن پاسخ آزاد و متن مکالمه بعد از ۹۰ روز حذف می‌شوند و فقط
+   * verdict/score می‌ماند. ردیف‌های خیلی قدیمی‌تر کاملاً حذف می‌شوند.
+   */
+  async stripOldTelemetryText(
+    olderThanIso: string,
+    limit = 200
+  ): Promise<number> {
+    try {
+      const rows = await this.db.select<{ id: string; payload: Record<string, unknown> | null }>(
+        'telemetry_events',
+        {
+          created_at: `lt.${olderThanIso}`,
+          select: 'id,payload',
+          limit: String(limit),
+        }
+      );
+
+      let stripped = 0;
+      for (const row of asRows(rows)) {
+        const p = row.payload;
+        if (!p || (!('answer' in p) && !('transcript' in p))) continue;
+
+        // فقط فیلدهای مجاز می‌مانند (شاهد بدون متن خام)
+        const kept: Record<string, unknown> = {};
+        for (const k of ['mode', 'verdict', 'score', 'errorType', 'objectiveId', 'stage', 'day', 'usedHint', 'turns']) {
+          if (k in p) kept[k] = p[k];
+        }
+
+        await this.db
+          .update('telemetry_events', { id: row.id }, { payload: kept })
+          .catch(() => undefined);
+        stripped += 1;
+      }
+      return stripped;
+    } catch {
+      return 0;
+    }
+  }
+
+  async deleteTelemetryOlderThan(olderThanIso: string): Promise<boolean> {
+    try {
+      await this.db.delete('telemetry_events', { created_at: `lt.${olderThanIso}` });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async listCompletedLessons(
     userId: string
   ): Promise<{ day_number: number; duration_seconds: number | null; completed_at: string | null }[]> {

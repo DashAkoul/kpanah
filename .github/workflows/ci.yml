@@ -20,6 +20,12 @@ jobs:
       - name: Install
         run: npm ci
 
+      # ⚠️ باگ شناختهٔ npm با optional deps بین پلتفرم‌ها: lockfile روی ویندوز
+      # ساخته شده و باینری native رول‌آپ برای لینوکس در آن نیست ⇒ vitest با
+      # «Cannot find module @rollup/rollup-linux-x64-gnu» می‌شکند.
+      - name: Ensure rollup native binary (linux)
+        run: npm i --no-save --no-audit --no-fund @rollup/rollup-linux-x64-gnu
+
       # پکیج مشترک باید قبل از typecheck ساخته شود (تایپ‌های تولیدشده)
       - name: Build shared
         run: npm run build:shared

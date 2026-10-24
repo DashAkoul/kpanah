@@ -799,6 +799,8 @@ function PatternItemView({
   onSelect: (index: number) => void;
 }) {
   const { t } = useTranslation();
+  const level = useSessionStore((s) => s.user?.skillLevel);
+  const isBeginner = level === 'ZERO' || level === 'A1';
 
   const showDetails = step === 'reveal' || step === 'pattern';
   const chosen =
@@ -938,6 +940,21 @@ function PatternItemView({
               </p>
               {selected === -1 && (
                 <p className="mt-1 text-[11px] text-text-hint">{t('lesson.dontKnowHint')}</p>
+              )}
+
+              {/**
+               * بازخورد متناسب با سطح (۱۷.۵):
+               * مبتدی ⇒ معنی روشن؛ بالاتر ⇒ جملهٔ نمونه برای دیدن کاربرد.
+               */}
+              {step === 'meaning' && item.meaning && isBeginner && (
+                <p className="mt-1 text-[11px] text-text-hint">
+                  📖 {t('lesson.meaningLabel')}: {item.meaning}
+                </p>
+              )}
+              {step === 'meaning' && item.example && !isBeginner && (
+                <p className="target-text mt-1 text-[11px] text-text-hint" dir="ltr">
+                  📝 {item.example}
+                </p>
               )}
             </div>
           )}

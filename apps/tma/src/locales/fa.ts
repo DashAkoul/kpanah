@@ -86,6 +86,7 @@ export default {
       FAIL: 'این بار به هدف نرسیدی',
     },
     roleplay: {
+      cardHintDay: 'تمرین انتقال روز {{day}} — در موقعیت واقعی به کارش ببر',
       cardTitle: 'گفت‌وگوی واقعی',
       cardHint: 'با یک موقعیت واقعی تمرین کن — ۳ نوبت + بازخورد',
       open: 'شروع',
@@ -160,6 +161,7 @@ export default {
       finishedBody: '{{correct}} از {{total}} درست بود.',
     },
     lesson: {
+      meaningLabel: 'معنی',
       listenPrompt: 'کدام واژه را شنیدی؟',
       chooseOption: 'یک گزینه انتخاب کن',
       socraticHint: 'به معنی «{{term}}» فکر کن و دوباره انتخاب کن — یکی از گزینه‌ها با آن هم‌خوان است.',

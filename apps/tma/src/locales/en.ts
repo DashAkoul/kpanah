@@ -86,6 +86,7 @@ export default {
       FAIL: 'Goal not reached this time',
     },
     roleplay: {
+      cardHintDay: 'Day {{day}} transfer task — use it in a real situation',
       cardTitle: 'Real conversation',
       cardHint: 'Practise a real situation — 3 turns + feedback',
       open: 'Start',
@@ -160,6 +161,7 @@ export default {
       finishedBody: '{{correct}} of {{total}} correct.',
     },
     lesson: {
+      meaningLabel: 'Meaning',
       listenPrompt: 'Which word did you hear?',
       chooseOption: 'Choose an option',
       socraticHint: 'Think about the meaning of “{{term}}” and choose again — one option matches it.',

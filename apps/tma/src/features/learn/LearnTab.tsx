@@ -186,13 +186,17 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
         </Card>
       )}
 
-      {/* نقش‌آفرینی — کاربرد واقعی */}
-      {data.map?.calibrated && (
+      {/* نقش‌آفرینی — بخشی از قوس چرخه (روز ۵ به بعد) */}
+      {data.map?.calibrated && data.lesson && data.lesson.dayNumber >= 5 && (
         <Card className="border-brand-200 bg-brand-50/40">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-xs font-semibold text-text">🎭 {t('roleplay.cardTitle')}</p>
-              <p className="mt-0.5 text-[11px] text-text-hint">{t('roleplay.cardHint')}</p>
+              <p className="text-xs font-semibold text-text">
+                🎭 {t('roleplay.cardTitle')}
+              </p>
+              <p className="mt-0.5 text-[11px] text-text-hint">
+                {t('roleplay.cardHintDay', { day: data.lesson.dayNumber })}
+              </p>
             </div>
             <Button size="sm" onClick={() => setRoleplayOpen(true)}>
               {t('roleplay.open')}

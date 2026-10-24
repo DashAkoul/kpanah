@@ -38,4 +38,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Smoke test live API
-        run: ./scripts/e2e-smoke.sh
+        run: bash scripts/e2e-smoke.sh

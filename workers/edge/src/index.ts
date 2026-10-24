@@ -27,6 +27,9 @@ import {
   handleEvaluateFreeWrite,
   handleDelayedCheck,
   handleDelayedSubmit,
+  handleRoleplayStart,
+  handleRoleplayTurn,
+  handleRoleplayFinish,
   handleOnboarding,
   handleUpdateProfile,
   handleDeleteAccount,
@@ -435,6 +438,12 @@ async function dispatch(
       return handleDelayedCheck(request, context);
     case 'delayed-submit':
       return handleDelayedSubmit(request, context);
+    case 'roleplay-start':
+      return handleRoleplayStart(request, context);
+    case 'roleplay-turn':
+      return handleRoleplayTurn(request, context);
+    case 'roleplay-finish':
+      return handleRoleplayFinish(request, context);
     case 'progress':
       return handleProgress(request, context);
     case 'debug-delta':

@@ -509,6 +509,56 @@ export const freeWriteResultSchema = z.object({
   corrected: z.string().max(400).optional(),
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// نقش‌آفرینی (گفت‌وگوی آزاد متنی)
+// ─────────────────────────────────────────────────────────────────────
+
+/** شروع: موقعیت + نقش‌ها + جملهٔ اول */
+export const roleplayStartSchema = z.object({
+  scenario: nonEmpty(400),
+  aiRole: nonEmpty(100),
+  userRole: nonEmpty(100),
+  opening: nonEmpty(400),
+  goal: nonEmpty(300),
+});
+
+export const roleplayTurnSchema = z.object({
+  reply: nonEmpty(400),
+});
+
+/** ورودی هر نوبت */
+export const roleplayTurnRequestSchema = z.object({
+  scenario: nonEmpty(400),
+  goal: nonEmpty(300),
+  userRole: nonEmpty(100),
+  aiRole: nonEmpty(100),
+  transcript: z
+    .array(z.object({ role: z.enum(['ai', 'user']), text: nonEmpty(600) }))
+    .min(1)
+    .max(12),
+});
+
+/** ارزیابی پایانی */
+export const roleplayFinishSchema = z.object({
+  verdict: z.enum(['PASS', 'PARTIAL', 'FAIL']),
+  score: z.number().min(0).max(1),
+  strengths: z.array(z.string().max(200)).max(3),
+  corrections: z
+    .array(
+      z.object({
+        original: z.string().max(300),
+        fixed: z.string().max(300),
+        note: z.string().max(200).optional(),
+      })
+    )
+    .max(4),
+  summary: z.string().max(400),
+});
+
+export const roleplayFinishRequestSchema = roleplayTurnRequestSchema.extend({
+  lessonId: z.string().uuid().optional(),
+});
+
 export const completeLessonSchema = z.object({
   lessonId: z.string().uuid(),
   durationSeconds: z.number().int().min(0).max(86_400),

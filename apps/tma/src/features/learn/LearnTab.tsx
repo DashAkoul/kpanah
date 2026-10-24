@@ -7,6 +7,7 @@ import { useHome, useRetryCycle, useDueReviews } from '../../hooks/useApi';
 import { ReviewSession } from './ReviewSession';
 import { CalibrationFlow } from './CalibrationFlow';
 import { DelayedCheck } from './DelayedCheck';
+import { RoleplayFlow } from './RoleplayFlow';
 import { useSessionStore } from '../../store/session';
 import { useUiStore } from '../../store/ui';
 
@@ -29,6 +30,7 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [calibrationOpen, setCalibrationOpen] = useState(false);
   const [delayedOpen, setDelayedOpen] = useState(false);
+  const [roleplayOpen, setRoleplayOpen] = useState(false);
   const showToast = useUiStore((s) => s.showToast);
 
   /**
@@ -183,6 +185,23 @@ export function LearnTab({ onStartLesson }: { onStartLesson: () => void }) {
           </div>
         </Card>
       )}
+
+      {/* نقش‌آفرینی — کاربرد واقعی */}
+      {data.map?.calibrated && (
+        <Card className="border-brand-200 bg-brand-50/40">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-text">🎭 {t('roleplay.cardTitle')}</p>
+              <p className="mt-0.5 text-[11px] text-text-hint">{t('roleplay.cardHint')}</p>
+            </div>
+            <Button size="sm" onClick={() => setRoleplayOpen(true)}>
+              {t('roleplay.open')}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {roleplayOpen && <RoleplayFlow onClose={() => setRoleplayOpen(false)} />}
 
       {/* مرور تأخیری — ماندگاری */}
       {data.map?.calibrated && (

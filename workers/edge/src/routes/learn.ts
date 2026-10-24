@@ -6,6 +6,8 @@ import {
   reviewSubmitSchema,
   calibrationSubmitSchema,
   freeWriteSubmitSchema,
+  roleplayTurnRequestSchema,
+  roleplayFinishRequestSchema,
   applyLeitnerReview,
   buildSkillDelta,
   computeStreak,
@@ -866,6 +868,131 @@ export async function handleRetryCycle(
   const via = await scheduleCycleGeneration(context, user.id, cycle.cycle_number);
 
   return jsonSuccess({ ok: true, via: via.via }, requestId, env);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// نقش‌آفرینی — گفت‌وگوی آزاد متنی (۳ نوبت + بازخورد پایانی)
+// ═════════════════════════════════════════════════════════════════════
+
+/** ساخت موتور متن (تکرار در سه اکشن نقش‌آفرینی) */
+async function textEngine(env: RequestContext['env'], r: ContentRepository) {
+  const { AiEngine, resolveProviderChain } = await import('../services/ai-engine');
+  const rows = await r.listActiveAiProviders();
+  const chain = await resolveProviderChain(rows, env, 'TEXT');
+  const engine = new AiEngine(env, chain, 'TEXT');
+  return engine.hasAnyProvider ? engine : null;
+}
+
+export async function handleRoleplayStart(
+  _request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const input = await buildGenerationInput(r, user, 1);
+  if (!input) return jsonError('INTERNAL_ERROR', 'could not build input', requestId, env, 500);
+
+  const engine = await textEngine(env, r);
+  if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
+
+  const res = await engine.startRoleplay(input);
+  if (!res.start) return jsonError('INTERNAL_ERROR', 'roleplay start failed', requestId, env, 502);
+  return jsonSuccess(res.start, requestId, env);
+}
+
+export async function handleRoleplayTurn(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const parsed = roleplayTurnRequestSchema.safeParse(await readJson(request));
+  if (!parsed.success) {
+    return jsonError('VALIDATION_ERROR', 'invalid roleplay payload', requestId, env, 400);
+  }
+
+  const engine = await textEngine(env, r);
+  if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
+
+  const res = await engine.roleplayReply({
+    targetLanguage: user.target_language,
+    uiLanguage: user.ui_language ?? 'fa',
+    level: String(user.skill_level ?? 'A1'),
+    ...parsed.data,
+  });
+
+  if (!res.reply) return jsonError('INTERNAL_ERROR', 'roleplay reply failed', requestId, env, 502);
+  return jsonSuccess({ reply: res.reply }, requestId, env);
+}
+
+export async function handleRoleplayFinish(
+  request: Request,
+  context: RequestContext
+): Promise<Response> {
+  const { env, requestId } = context;
+  const resolved = await requireUser(context);
+  if ('error' in resolved) {
+    return jsonError('NOT_FOUND', resolved.error, requestId, env, 404);
+  }
+  const { user, repo: r } = resolved;
+
+  const parsed = roleplayFinishRequestSchema.safeParse(await readJson(request));
+  if (!parsed.success) {
+    return jsonError('VALIDATION_ERROR', 'invalid roleplay payload', requestId, env, 400);
+  }
+
+  const engine = await textEngine(env, r);
+  if (!engine) return jsonError('INTERNAL_ERROR', 'no AI provider', requestId, env, 502);
+
+  const res = await engine.evaluateRoleplay({
+    targetLanguage: user.target_language,
+    uiLanguage: user.ui_language ?? 'fa',
+    level: String(user.skill_level ?? 'A1'),
+    scenario: parsed.data.scenario,
+    goal: parsed.data.goal,
+    userRole: parsed.data.userRole,
+    aiRole: parsed.data.aiRole,
+    transcript: parsed.data.transcript,
+  });
+
+  if (!res.result) {
+    return jsonError('INTERNAL_ERROR', 'roleplay evaluation failed', requestId, env, 502);
+  }
+
+  // شاهد یادگیری: یک رویداد برای کل نقش‌آفرینی
+  try {
+    await r.insertTelemetry([
+      {
+        user_id: user.id,
+        lesson_id: parsed.data.lessonId ?? null,
+        cycle_id: null,
+        event_type: 'ANSWER',
+        item_id: 'roleplay',
+        is_correct: res.result.verdict === 'PASS',
+        response_ms: null,
+        payload: {
+          mode: 'ROLEPLAY',
+          verdict: res.result.verdict,
+          score: res.result.score,
+          turns: parsed.data.transcript.filter((t) => t.role === 'user').length,
+        },
+      },
+    ]);
+  } catch {
+    /* best-effort */
+  }
+
+  return jsonSuccess(res.result, requestId, env);
 }
 
 // ═════════════════════════════════════════════════════════════════════

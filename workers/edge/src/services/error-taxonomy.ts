@@ -25,3 +25,25 @@ export function errorTypeFor(
   if (itemId.startsWith('story-')) return 'COMPREHENSION';
   return usedHint ? 'VOCABULARY' : 'OTHER';
 }
+
+/**
+ * نگاشت آیتم به **مهارت** — پایهٔ تسلط تفکیک‌شده (چک‌لیست ۱۱.۶).
+ * ⚠️ تشخیص ≠ تولید ≠ شنیدن؛ جمع‌زدنشان یک «تسلط» واحد می‌سازد که غلط است.
+ */
+export type SkillKey =
+  | 'VOCABULARY'
+  | 'GRAMMAR'
+  | 'APPLICATION'
+  | 'PRODUCTION'
+  | 'COMPREHENSION'
+  | 'RETENTION';
+
+export function skillFor(itemId: string): SkillKey | null {
+  if (itemId.startsWith('meaning-')) return 'VOCABULARY';
+  if (itemId.startsWith('example-')) return 'GRAMMAR';
+  if (itemId.startsWith('pattern-')) return 'APPLICATION';
+  if (itemId.startsWith('write-')) return 'PRODUCTION';
+  if (itemId.startsWith('story-')) return 'COMPREHENSION';
+  if (itemId.startsWith('delayed-')) return 'RETENTION';
+  return null;
+}

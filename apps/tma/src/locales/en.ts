@@ -229,6 +229,18 @@ export default {
       COMPREHENSION: 'Comprehension',
       OTHER: 'Other',
     },
+    adminMap: {
+      title: 'Learning map (inspect)',
+      stage: 'Current stage',
+      violations: 'Rule violations',
+      decisions: 'Decisions',
+      status: {
+        PLANNED: 'Planned',
+        IN_PROGRESS: 'In progress',
+        NEEDS_WORK: 'Needs work',
+        MASTERED: 'Mastered',
+      },
+    },
     profile: {
       transfer: 'Transfer to real situations',
       quality: 'Learning quality',

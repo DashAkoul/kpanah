@@ -768,6 +768,8 @@ export interface LearningMap {
   violations: { at: string; cycleId: string; rule: string; detail: string }[];
   /** سابقهٔ تصمیم‌های موتور تطبیقی (آخرین ۲۰۰ مورد) */
   decisions?: DecisionRecord[];
+  /** تسلط تفکیک‌شده به مهارت — هر مهارت جداگانه سنجیده می‌شود */
+  skillMastery?: Record<string, { correct: number; total: number }>;
   /** نتیجهٔ آزمون کالیبراسیون (سطح برآوردی) */
   calibration?: {
     takenAt: string;
@@ -811,6 +813,8 @@ export interface ProgressDashboard {
   helpRatePct?: number | null;
   /** نرخ موفقیت در انتقال یادگیری (نقش‌آفرینی) */
   transferPct?: number | null;
+  /** تسلط تفکیک‌شده به مهارت (درصد) */
+  skillMastery?: { skill: string; pct: number; total: number }[];
 }
 
 /** بخش ۳ درس — داستان کوتاه + درک مطلب */

@@ -460,6 +460,19 @@ export const api = {
       totalDue: number;
     }>('due-reviews'),
 
+  /** نقشهٔ ادمین (بازرسی) */
+  adminMap: () =>
+    callApi<{
+      version: number;
+      rulesVersion: number | null;
+      currentStageId: string;
+      stages: { id: string; order: number; title: string; status: string }[];
+      violations: { at: string; rule: string; detail: string }[];
+      decisions: { at: string; ruleId: string; output: string; reason: string }[];
+      skillMastery: Record<string, { correct: number; total: number }>;
+      calibration: { estimated: string; scorePct: number } | null;
+    }>('admin-map'),
+
   /** نقش‌آفرینی */
   roleplayStart: () =>
     callApi<{ scenario: string; aiRole: string; userRole: string; opening: string; goal: string }>(
@@ -518,7 +531,7 @@ export const api = {
     }>('evaluate-free-write', { method: 'POST', body }),
 
   /** آزمون کالیبراسیون (سطح برآوردی) */
-  calibrationTest: () =>
+  calibrationTest: (stage?: 'hard') =>
     callApi<{
       alreadyCalibrated: boolean;
       items?: {
@@ -528,10 +541,11 @@ export const api = {
         correctIndex: number;
       }[];
       calibration?: unknown;
-    }>('calibration-test'),
+    }>('calibration-test', { method: 'POST', body: stage ? { stage } : {} }),
 
   calibrationSubmit: (body: {
     answers: { term: string; isCorrect: boolean; responseMs: number }[];
+    hard?: boolean;
   }) =>
     callApi<{
       estimated: string;

@@ -1870,7 +1870,7 @@ const CACHE_CONTENT_VERSION = 3;
  * (outline جدید + درس قدیمی = ناسازگاری). حالا هر دو نسخه دارند.
  * مقدار ۲ = پس از حذف فیلدهای بلااستفادهٔ اسکیمای درس.
  */
-export const LESSON_CONTENT_VERSION = 8;
+export const LESSON_CONTENT_VERSION = 9;
 
 function cacheKeyFor(
   input: CycleGenerationInput,
@@ -2596,7 +2596,27 @@ async function ensureLessonContent(
   if (!res.lesson) return null;
 
   // هم‌ترازی با کش سطح واژه قبل از ذخیره → محتوای کش‌شده هم ثابت است
-  const aligned = await alignTermCards(r, input, res.lesson);
+  let aligned = await alignTermCards(r, input, res.lesson);
+
+  /**
+   * ⚠️ اعتبارسنجی **فعال** نسبت به نقشه: هر سؤالی که به واژه‌ای بیرون از
+   * بخش ۱ ارجاع دهد حذف می‌شود (نه فقط ثبت). این جلوی «محتوا خارج از نقشه»
+   * را می‌گیرد بدون اینکه کاربر بدون درس بماند.
+   */
+  const lessonTerms = new Set(
+    (aligned.part1?.items ?? []).map((i) => i.term.trim().toLowerCase())
+  );
+  const questions = aligned.part2?.questions ?? [];
+  const keptQuestions = questions.filter((q) => {
+    const linked = q.linkedTerm?.trim().toLowerCase();
+    return !linked || lessonTerms.has(linked);
+  });
+  if (keptQuestions.length !== questions.length) {
+    aligned = {
+      ...aligned,
+      part2: { ...aligned.part2, questions: keptQuestions },
+    };
+  }
 
   /**
    * ⚠️ نسخهٔ محلی بخش ۳ (چسباندن جمله‌های مثال) **غیرفعال شد**: جملات

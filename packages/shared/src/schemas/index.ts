@@ -151,6 +151,9 @@ export const patternDrillItemSchema = z.object({
   meaningOptions: drillChoiceSchema.optional(),
   /** گزینه‌های مثال — کاربر مثال درست را انتخاب می‌کند */
   exampleOptions: drillChoiceSchema.optional(),
+  /** شبکهٔ واژگان: ترکیب‌های رایج و مترادف‌ها (اختیاری) */
+  collocations: z.array(nonEmpty(80)).max(4).optional(),
+  synonyms: z.array(nonEmpty(80)).max(4).optional(),
   /**
    * تمرین تولید آزاد — کاربر خودش جمله می‌سازد.
    * ⚠️ تنها بخشی از درس که پاسخش با AI ارزیابی می‌شود (نه تطبیق رشته).

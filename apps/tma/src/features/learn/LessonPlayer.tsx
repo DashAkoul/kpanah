@@ -116,6 +116,9 @@ export function LessonPlayer({
 
   const [p1Selected, setP1Selected] = useState<number | null>(null);
   const [p1Checked, setP1Checked] = useState(false);
+  /** تلاش‌های بخش ۱ — برای روش سقراطی (یک تلاش دوم با راهنما) */
+  const [p1Attempts, setP1Attempts] = useState(0);
+  const [p1Hint, setP1Hint] = useState<string | null>(null);
   // تولید آزاد (نوشتاری)
   const [writeText, setWriteText] = useState('');
   const [writeBusy, setWriteBusy] = useState(false);
@@ -229,6 +232,8 @@ export function LessonPlayer({
       setP1Step(firstStep(next));
       setP1Selected(null);
       setP1Checked(false);
+      setP1Attempts(0);
+      setP1Hint(null);
       setWriteText('');
       setWriteResult(null);
       session.markItemStart();
@@ -247,15 +252,30 @@ export function LessonPlayer({
     if (!currentItem || p1Selected === null || !currentChoice) return;
 
     const isCorrect = p1Selected === currentChoice.correctIndex;
+
+    /**
+     * روش سقراطی: تلاش اولِ غلط، پاسخ را لو نمی‌دهد؛ یک راهنمای هدفمند
+     * می‌دهد و اجازهٔ تلاش دوم. فقط اگر تلاش دوم هم غلط بود، پاسخ آشکار
+     * می‌شود. ⚠️ اگر در تلاش دوم درست شد، `usedHint=true` ثبت می‌شود تا
+     * «وابستگی به راهنما» درست اندازه‌گیری شود.
+     */
+    if (!isCorrect && p1Attempts === 0) {
+      haptic('warning');
+      setP1Hint(t('lesson.socraticHint', { term: currentItem.term }));
+      setP1Attempts(1);
+      setP1Selected(null);
+      return;
+    }
+
     session.recordAnswer({
       itemId: `${p1Step}-${itemIndex}`,
       isCorrect,
       linkedTerm: currentItem.term,
-      usedHint: false,
+      usedHint: p1Attempts > 0,
     });
     haptic(isCorrect ? 'success' : 'error');
     setP1Checked(true);
-  }, [currentItem, currentChoice, p1Selected, p1Step, itemIndex, session]);
+  }, [currentItem, currentChoice, p1Selected, p1Step, itemIndex, session, p1Attempts, t]);
 
   /** رفتن به مرحلهٔ بعدی (یا آیتم بعدی) */
   const nextP1 = useCallback(() => {
@@ -264,6 +284,8 @@ export function LessonPlayer({
       setP1Step(next);
       setP1Selected(null);
       setP1Checked(false);
+      setP1Attempts(0);
+      setP1Hint(null);
       if (next === 'write') {
         setWriteText('');
         setWriteResult(null);
@@ -445,6 +467,13 @@ export function LessonPlayer({
             </div>
           )}
         </Card>
+      )}
+
+      {/* راهنمای سقراطی (تلاش دوم) */}
+      {p1Hint && !p1Checked && (
+        <div className="mt-2 rounded-xl border border-warning-500/30 bg-warning-100/40 p-2.5">
+          <p className="text-[11px] leading-relaxed text-text">💡 {p1Hint}</p>
+        </div>
       )}
 
         {part === 3 && story && (
@@ -757,6 +786,31 @@ function PatternItemView({
           </div>
         )}
       </Card>
+
+      {/* شبکهٔ واژگان — هم‌آیند و مترادف */}
+      {step === 'example' &&
+        ((item.collocations?.length ?? 0) > 0 || (item.synonyms?.length ?? 0) > 0) && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {(item.collocations ?? []).map((c) => (
+              <span
+                key={`c-${c}`}
+                className="target-text rounded-lg bg-brand-50 px-2 py-1 text-[10px] text-brand-700"
+                dir="ltr"
+              >
+                {c}
+              </span>
+            ))}
+            {(item.synonyms ?? []).map((c) => (
+              <span
+                key={`s-${c}`}
+                className="target-text rounded-lg bg-[var(--surface-sunken)] px-2 py-1 text-[10px] text-text-hint"
+                dir="ltr"
+              >
+                ≈ {c}
+              </span>
+            ))}
+          </div>
+        )}
 
       {/* سؤال مرحلهٔ جاری */}
       {choice && step !== 'reveal' && (
